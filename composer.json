@@ -1,0 +1,43 @@
+{
+    "name": "cestnytr/vitalwatch-laravel",
+    "description": "Laravel uygulamaları için VitalWatch izleme istemcisi — kişisel veri toplamadan exception, yavaş istek ve yavaş sorgu raporlar.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["laravel", "monitoring", "error-tracking", "kvkk"],
+    "require": {
+        "php": "^8.2",
+        "ext-curl": "*",
+        "illuminate/support": "^11.0 || ^12.0 || ^13.0",
+        "illuminate/http": "^11.0 || ^12.0 || ^13.0"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^9.0 || ^10.0",
+        "pestphp/pest": "^3.0",
+        "laravel/pint": "^1.24"
+    },
+    "autoload": {
+        "psr-4": {
+            "CestnyTR\\VitalWatch\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "CestnyTR\\VitalWatch\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "CestnyTR\\VitalWatch\\VitalWatchServiceProvider"
+            ]
+        }
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
