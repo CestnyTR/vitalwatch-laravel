@@ -39,9 +39,15 @@ jobs:
     needs: tests
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      contents: read
     steps:
+      # Etiket deploy key ile gönderilir, GITHUB_TOKEN ile değil: repodaki tag
+      # ruleset'i `v*` etiketlerini herkese kapatıyor ve istisna yalnızca deploy
+      # key. Böylece elle atılan (testten geçmemiş) bir etiket Packagist'e
+      # hiç ulaşamaz.
       - uses: actions/checkout@v4
+        with:
+          ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
       # Etiket test edilen commit'e atılır: çalıştırma sırasında main ilerlemiş
       # olsa da yayına giden, testten geçen koddur.
       - name: Etiketi oluştur ve gönder
