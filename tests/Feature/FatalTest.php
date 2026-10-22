@@ -47,7 +47,7 @@ test('ölümcül hata fatal türüyle gönderilir', function () {
     // exception DEĞİL: bir exception uygulamanın yakalayabildiği bir şey,
     // fatal ise sunucunun sınırına çarpması. Ayrıca süzülebilmeli.
     expect($event['kind'])->toBe('fatal')
-        ->and($event['msg'])->toContain('Ölümcül hata')
+        ->and($event['msg'])->toContain('Fatal error')
         ->and($event['msg'])->toContain('memory size')
         ->and($event['line'])->toBe(88)
         // Limite mi çarpıldı, başka sebeple mi ölündü — ayrımı bu veriyor.
@@ -61,8 +61,8 @@ test('hata türü okunur adıyla yazılır', function () {
     $recorder->recordFatal(['type' => E_PARSE, 'message' => 'x', 'file' => '/a.php', 'line' => 1]);
     $recorder->recordFatal(['type' => E_COMPILE_ERROR, 'message' => 'y', 'file' => '/b.php', 'line' => 2]);
 
-    expect($gonderilenler[0]['msg'])->toContain('Sözdizimi hatası')
-        ->and($gonderilenler[1]['msg'])->toContain('Derleme hatası');
+    expect($gonderilenler[0]['msg'])->toContain('Parse error')
+        ->and($gonderilenler[1]['msg'])->toContain('Compile error');
 });
 
 /**

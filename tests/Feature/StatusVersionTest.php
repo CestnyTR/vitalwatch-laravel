@@ -65,8 +65,8 @@ test('daha yeni sürüm varsa uyarı yazılır, komut yine başarılı', functio
     app()->instance(Packagist::class, vitalwatchPackagist(vitalwatchPackagistBody(['v0.2.2', 'v0.10.1', 'v0.9.0']), 'v0.2.2'));
 
     $this->artisan('vitalwatch:status')
-        ->expectsOutputToContain('Güncel sürüm       0.10.1')
-        ->expectsOutputToContain('Güncelleme var: composer require cestnytr/vitalwatch-laravel:^0.10')
+        ->expectsOutputToContain('Latest version     0.10.1')
+        ->expectsOutputToContain('Update available: composer require cestnytr/vitalwatch-laravel:^0.10')
         ->assertSuccessful();
 });
 
@@ -74,23 +74,23 @@ test('kurulu sürüm güncelse uyarı yok', function (string $installed) {
     app()->instance(Packagist::class, vitalwatchPackagist(vitalwatchPackagistBody(['v0.2.2', 'v0.2.3']), $installed));
 
     $this->artisan('vitalwatch:status')
-        ->expectsOutputToContain('Güncel sürüm       0.2.3')
-        ->doesntExpectOutputToContain('Güncelleme var')
+        ->expectsOutputToContain('Latest version     0.2.3')
+        ->doesntExpectOutputToContain('Update available')
         ->assertSuccessful();
-})->with([['v0.2.3'], ['0.2.3'], ['0.3.0'], ['isUnknown'], ['dev-main']]);
+})->with([['v0.2.3'], ['0.2.3'], ['0.3.0'], ['unknown'], ['dev-main']]);
 
 test('ağ hatasında denetlenemedi yazılır, komut başarısız sayılmaz', function () {
     app()->instance(Packagist::class, vitalwatchPackagist(null));
 
     $this->artisan('vitalwatch:status')
-        ->expectsOutputToContain('Güncel sürüm       denetlenemedi')
+        ->expectsOutputToContain('Latest version     could not check')
         ->assertSuccessful();
 });
 
 test('bozuk yanıt denetlenemedi sayılır', function () {
     app()->instance(Packagist::class, vitalwatchPackagist('<html>'));
 
-    $this->artisan('vitalwatch:status')->expectsOutputToContain('denetlenemedi')->assertSuccessful();
+    $this->artisan('vitalwatch:status')->expectsOutputToContain('could not check')->assertSuccessful();
 });
 
 test('VITALWATCH_STATUS_OFFLINE=1 denetimi atlar', function () {
@@ -99,7 +99,7 @@ test('VITALWATCH_STATUS_OFFLINE=1 denetimi atlar', function () {
     putenv('VITALWATCH_STATUS_OFFLINE=1');
 
     $this->artisan('vitalwatch:status')
-        ->doesntExpectOutputToContain('Güncel sürüm')
+        ->doesntExpectOutputToContain('Latest version')
         ->assertSuccessful();
 
     expect($fake->calls)->toBe(0);
@@ -109,14 +109,14 @@ test('sürüm etiketi ve kaynağı gösterilir', function () {
     config()->set('vitalwatch.release', 'v2.4.1');
 
     $this->artisan('vitalwatch:status')
-        ->expectsOutputToContain('Sürüm etiketi      v2.4.1 (kaynak: VITALWATCH_RELEASE)')
+        ->expectsOutputToContain('Release tag        v2.4.1 (source: VITALWATCH_RELEASE)')
         ->assertSuccessful();
 
     config()->set('vitalwatch.release', null);
     putenv('GIT_COMMIT='.str_repeat('ab', 20));
 
     $this->artisan('vitalwatch:status')
-        ->expectsOutputToContain('Sürüm etiketi      abababababab (kaynak: GIT_COMMIT)')
+        ->expectsOutputToContain('Release tag        abababababab (source: GIT_COMMIT)')
         ->assertSuccessful();
 });
 

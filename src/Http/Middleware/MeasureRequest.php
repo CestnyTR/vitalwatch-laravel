@@ -9,6 +9,9 @@ use Symfony\Component\HttpFoundation\Response;
 use Throwable;
 
 /**
+ * Measures request duration and reports slow requests and 5xx responses.
+ * Registered automatically by the service provider.
+ *
  * İstek süresini ölçer ve eşiği aşanları raporlar.
  *
  * Ölçüm `handle`'da başlar, gönderim `terminate`'te yapılır: yanıt kullanıcıya

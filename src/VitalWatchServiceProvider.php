@@ -23,6 +23,11 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\ServiceProvider;
 use Throwable;
 
+/**
+ * Registers VitalWatch: config, the `vitalwatch:status` command and the
+ * exception, query, request, queue and scheduler hooks. Loaded through
+ * package discovery; installs nothing when `VITALWATCH_ENABLED=false`.
+ */
 class VitalWatchServiceProvider extends ServiceProvider
 {
     public function register(): void

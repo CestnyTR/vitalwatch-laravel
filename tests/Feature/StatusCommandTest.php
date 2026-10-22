@@ -21,7 +21,7 @@ test('kısa secret yakalanır', function () {
     config()->set('vitalwatch.secret', str_repeat('a', 32));
 
     $this->artisan('vitalwatch:status')
-        ->expectsOutputToContain('64 karakter olmalı')
+        ->expectsOutputToContain('must be 64 characters')
         ->assertFailed();
 });
 
@@ -82,7 +82,7 @@ test('gönderim başarısızsa test komutu başarısız döner', function () {
     app()->forgetInstance(Recorder::class);
 
     $this->artisan('vitalwatch:status --test')
-        ->expectsOutputToContain('GÖNDERİLEMEDİ')
+        ->expectsOutputToContain('Test event NOT SENT')
         ->assertFailed();
 });
 
@@ -123,7 +123,7 @@ test('kurulu paket sürümü yazdırılır', function () {
     config()->set('vitalwatch.secret', str_repeat('a', 64));
 
     $this->artisan('vitalwatch:status')
-        ->expectsOutputToContain('Paket sürümü')
+        ->expectsOutputToContain('SDK version')
         ->assertSuccessful();
 });
 
@@ -175,7 +175,7 @@ test('tanınmayan ortamda komut hata verir', function () {
     config(['vitalwatch.env' => 'qa-eu']);
 
     $this->artisan('vitalwatch:status')
-        ->expectsOutputToContain('kabul edilmez')
+        ->expectsOutputToContain('is not accepted by the hub')
         ->assertFailed();
 });
 

@@ -5,8 +5,16 @@ Bu paket **izlenen projelere** kurulur. Hub'ın kendisi ayrı repodadır:
 
 ## Dil
 
-Yorumlar ve dokümantasyon Türkçe; sınıf/metot/değişken adları İngilizce.
-**README ve public API dokümantasyonu Türkçe** — bu paketi kuran ekip Türkçe çalışıyor.
+- **README, CHANGELOG ve paket açıklaması (composer.json `description`) İngilizce.** Paketler
+  public ve uluslararası kitleye yayınlanıyor (karar: 22 Ekim 2026).
+- **Kullanıcının gördüğü her çıktı İngilizce:** `vitalwatch:status` çıktısı ve seçenek
+  açıklamaları, log uyarıları, SDK'nın kendi ürettiği olay mesajları (`msg`), yayınlanan
+  `config/vitalwatch.php` yorumları ve public sınıfların PHPDoc özetleri (IDE'de görünür).
+  Status etiketleri Node/Python/.NET SDK'larıyla aynı tutulur ("SDK version", "Latest version",
+  "Release tag", "could not check", "Configuration OK." …).
+- Kod yorumları (yalnızca bakımcının okuduğu `//`, `/* */` ve iç gerekçe metinleri) ve test
+  adları Türkçe kalır.
+- Sınıf/metot/değişken adları İngilizce.
 
 ---
 

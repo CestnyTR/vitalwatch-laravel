@@ -1,6 +1,6 @@
 {
     "name": "cestnytr/vitalwatch-laravel",
-    "description": "Laravel uygulamaları için VitalWatch izleme istemcisi — kişisel veri toplamadan exception, yavaş istek ve yavaş sorgu raporlar.",
+    "description": "VitalWatch monitoring client for Laravel — reports exceptions, slow requests and slow queries without collecting personal data.",
     "type": "library",
     "license": "MIT",
     "keywords": ["laravel", "monitoring", "error-tracking", "kvkk"],

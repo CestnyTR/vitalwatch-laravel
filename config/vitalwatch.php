@@ -11,11 +11,11 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Açma / kapama
+    | On / off
     |--------------------------------------------------------------------------
     |
-    | false iken HİÇBİR kanca kurulmaz — sıfır ek yük. Sorun şüphesinde
-    | uygulamayı yeniden dağıtmadan izlemeyi kapatmanın yolu budur.
+    | When false, NO hooks are installed — zero overhead. If you suspect a
+    | problem, this turns monitoring off without redeploying the application.
     |
     */
 
@@ -23,11 +23,11 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Hub bağlantısı
+    | Hub connection
     |--------------------------------------------------------------------------
     |
-    | secret YALNIZCA sunucuda bulunur; tarayıcıya konulmaz. Tarayıcı hataları
-    | için ayrı, anahtar tabanlı t.js kullanılır.
+    | The secret lives ONLY on the server; never put it in the browser. Browser
+    | errors use the separate, key-based t.js script.
     |
     */
 
@@ -35,20 +35,20 @@ return [
     'key' => env('VITALWATCH_KEY'),
     'secret' => env('VITALWATCH_SECRET'),
 
-    // Boş bırakılırsa uygulamanın kendi ortamı kullanılır.
+    // When empty, the application's own environment is used.
     'env' => env('VITALWATCH_ENV'),
 
-    // Deploy etiketi: hatanın hangi sürümle geldiğini bulmak için. Boşsa
-    // CI değişkeninden ya da `.git`'ten çalışma anında bulunur (bkz. Release).
+    // Deploy tag, to find out which release introduced an error. When empty,
+    // it is detected at runtime from a CI variable or from `.git`.
     'release' => env('VITALWATCH_RELEASE'),
 
     /*
     |--------------------------------------------------------------------------
-    | Eşikler
+    | Thresholds (milliseconds)
     |--------------------------------------------------------------------------
     |
-    | Her istek gönderilmez, yalnızca eşiği aşanlar. Böylece hacim düşük kalır
-    | ve gelen her kayıt gerçekten ilgilenilmesi gereken bir kayıttır.
+    | Not every request is sent, only those above the threshold. This keeps the
+    | volume low, and every record that arrives is one worth looking at.
     |
     */
 
@@ -57,14 +57,16 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Kişisel veri
+    | Personal data
     |--------------------------------------------------------------------------
     |
-    | user_id kimliği belirli bir kişiye bağlar. Varsayılan kapalı; açmak
-    | bilinçli bir karardır ve KVKK açısından ayrıca değerlendirilmelidir.
+    | user_id ties a record to an identifiable person. Off by default; turning
+    | it on is a deliberate decision and should be reviewed under your data
+    | protection rules (GDPR, KVKK).
     |
-    | IP, User-Agent, istek gövdesi, query string değerleri, oturum ve çerez
-    | verisi bu ayarla dahi toplanamaz — kodda karşılıkları yoktur.
+    | IP address, User-Agent, request body, query string values, session and
+    | cookie data cannot be collected even with this setting — the code for it
+    | does not exist.
     |
     */
 
@@ -72,10 +74,11 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Yok sayılacak exception sınıfları
+    | Ignored exception classes
     |--------------------------------------------------------------------------
     |
-    | Beklenen akış istisnaları panelde gürültü üretir. Alt sınıflar da eşleşir.
+    | Expected control-flow exceptions only create noise in the panel.
+    | Subclasses match as well.
     |
     */
 
@@ -90,21 +93,19 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Ağ
+    | Network
     |--------------------------------------------------------------------------
     |
-    | Kısa tutulur: raporlama isteği terminate aşamasında gönderilse bile
-    | PHP sürecini meşgul eder. Hub yanıt vermezse sessizce vazgeçilir.
+    | Kept short: even when sent during terminate, the report keeps the PHP
+    | process busy. If the hub does not answer, the report is silently dropped.
     |
     */
 
     /*
-    | Saniye. 100 ve üstü milisaniye sayılır (bkz. HubClient::timeoutSeconds):
-    | Node paketi milisaniye bekliyor ve aynı adla `VITALWATCH_TIMEOUT=2000`
-    | yazılınca PHP süreci hub'ı 2000 saniye beklerdi. Eskiden `(int)` ile
-    | okunuyor, `0.5` sıfıra — sınırsız beklemeye — dönüyordu. Geçersiz,
-    | sıfır, negatif ya da sonsuz değer 2 sn olur; sonuç 0,1–10 sn
-    | aralığına kırpılır.
+    | Seconds. Values of 100 and above are read as milliseconds, so
+    | `VITALWATCH_TIMEOUT=2000` (the Node package's unit) means 2 seconds.
+    | Fractions are allowed (`0.5`). Invalid, zero, negative or infinite
+    | values fall back to 2 s; the result is clamped to 0.1–10 s.
     */
     'timeout' => env('VITALWATCH_TIMEOUT', 2),
 

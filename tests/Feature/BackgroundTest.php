@@ -193,7 +193,7 @@ test('zaman aşımına uğrayan iş job_failed olarak gelir', function () {
     $events = array_values(array_filter($this->gonderilenler, fn ($o) => ! isset($o['events'])));
 
     expect(array_column($events, 'kind'))->toBe(['job_failed'])
-        ->and($events[0]['msg'])->toBe('Kuyruk işi zaman aşımına uğradı: App\Jobs\RaporHazirla (60 sn)')
+        ->and($events[0]['msg'])->toBe('Queue job timed out: App\Jobs\RaporHazirla (60 s)')
         ->and($events[0]['route'])->toBe('App\Jobs\RaporHazirla')
         ->and($events[0]['exception_class'])->toBe('JobTimedOut');
 });

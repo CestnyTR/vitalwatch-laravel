@@ -13,6 +13,10 @@ use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 use Throwable;
 
 /**
+ * Collects measurements during a request and sends events to the VitalWatch hub.
+ * Resolve it from the container (`app(Recorder::class)`); every method is
+ * fail-safe and never throws.
+ *
  * İstek boyunca ölçüm biriktirir ve olayları hub'a gönderir.
  *
  * Tek istek yaşam döngüsü boyunca tekil (singleton) çalışır: sorgu sayacı ve
@@ -89,7 +93,7 @@ class Recorder
     /** Canlılık önbelleğine en son bakılan an; kuyruk döngüsünü seyreltir. */
     private ?float $heartbeatCheckedAt = null;
 
-    /** Middleware'in handle aşamasında çağrılır. */
+    /** Marks the start of a measured request (called by the middleware). */
     public function startRequest(float $at): void
     {
         // İlk çağrı kazanır: alt istekler (Route::dispatch) başlangıcı ezmesin.
@@ -97,6 +101,8 @@ class Recorder
     }
 
     /**
+     * Resets per-request / per-job state.
+     *
      * İstek/iş başına durumu sıfırlar.
      *
      * İstek bitiminde (terminate) ve kuyruk işi başlarken (JobProcessing)
@@ -114,13 +120,13 @@ class Recorder
         $this->slowestQuerySql = null;
     }
 
-    /** Octane işçisi mi. Octane sunucuyu başlatırken bu değişkeni koyuyor. */
+    /** Whether this process is an Octane worker (Octane sets LARAVEL_OCTANE at startup). */
     public static function octane(): bool
     {
         return (bool) ($_SERVER['LARAVEL_OCTANE'] ?? $_ENV['LARAVEL_OCTANE'] ?? getenv('LARAVEL_OCTANE'));
     }
 
-    /** DB::listen kancasından çağrılır. */
+    /** Records a query from the DB::listen hook; sends a `slow_query` event above the threshold. */
     public function recordQuery(string $sql, float $timeMs): void
     {
         $this->queryCount++;
@@ -143,6 +149,9 @@ class Recorder
     }
 
     /**
+     * Reports an exception as an `exception` event (masked before sending).
+     * Ignored classes, 4xx client errors and already reported exceptions are skipped.
+     *
      * @return array{sent: bool, status?: int, error?: string}
      */
     public function recordException(Throwable $e): array
@@ -178,6 +187,8 @@ class Recorder
     }
 
     /**
+     * Reports a queue job that ran out of attempts as a `job_failed` event.
+     *
      * Deneme hakkı biten kuyruk işi.
      *
      * Rota yerine işin sınıfı gönderilir: panelde hangi işin düştüğü "Yol"
@@ -198,6 +209,9 @@ class Recorder
     }
 
     /**
+     * Reports a queue job that timed out as a `job_failed` event, unless the
+     * same job was already reported as failed.
+     *
      * Zaman aşımına uğrayan kuyruk işi.
      *
      * Deneme hakkı bitmişse Laravel işi zaten başarısız sayıyor ve
@@ -218,19 +232,21 @@ class Recorder
         }
 
         $this->jobReported = true;
-        $duration = $seconds !== null ? " ({$seconds} sn)" : '';
+        $duration = $seconds !== null ? " ({$seconds} s)" : '';
 
         return $this->send([
             'kind' => 'job_failed',
             // İş adı mesajda: parmak izi yolu içermiyor, iki ayrı işin zaman
             // aşımı aynı satırda toplanmamalı.
-            'msg' => Scrubber::text("Kuyruk işi zaman aşımına uğradı: {$job}{$duration}", 500),
+            'msg' => Scrubber::text("Queue job timed out: {$job}{$duration}", 500),
             'exception_class' => 'JobTimedOut',
             'route' => mb_substr($job, 0, 300),
         ]);
     }
 
     /**
+     * Reports a failed scheduled task as a `command_failed` event.
+     *
      * Başarısız zamanlanmış görev. Laravel sıfır olmayan çıkışı da istisnaya
      * çeviriyor, yani istisna her zaman var.
      *
@@ -292,6 +308,9 @@ class Recorder
     }
 
     /**
+     * Finishes a measured request: flushes pending events and sends
+     * `slow_request` / `http_5xx` when applicable. Called on terminate.
+     *
      * İstek bitiminde çağrılır (terminate). Kullanıcı yanıtı çoktan
      * gönderilmiştir; burada harcanan süre kimseyi bekletmez.
      */
@@ -309,7 +328,7 @@ class Recorder
         }
     }
 
-    /** Bekleyen olayları gönderir. Hiçbir koşulda fırlatmaz. */
+    /** Sends pending events. Never throws. */
     public function flushPending(): void
     {
         while ($this->pending !== []) {
@@ -357,6 +376,8 @@ class Recorder
     }
 
     /**
+     * Installed package version, or `unknown`.
+     *
      * Kurulu paket sürümü.
      *
      * Composer 2'nin çalışma zamanı API'sinden okunuyor; ayrıca elle
@@ -373,7 +394,7 @@ class Recorder
             // Sürüm okunamadıysa raporlama durmaz.
         }
 
-        return 'isUnknown';
+        return 'unknown';
     }
 
     /**
@@ -385,6 +406,8 @@ class Recorder
     private const HEARTBEAT_HOURS = 8;
 
     /**
+     * Reports a PHP fatal error (from `error_get_last()`) as a `fatal` event.
+     *
      * Ölümcül hata — istisna mekanizmasından geçmeyen ölüm.
      *
      * `error_get_last()` çıktısı beklenir. Stack trace yoktur: süreç zaten
@@ -426,16 +449,18 @@ class Recorder
     private function fatalLabel(int $type): string
     {
         return match ($type) {
-            E_ERROR => 'Ölümcül hata',
-            E_PARSE => 'Sözdizimi hatası',
-            E_CORE_ERROR => 'Çekirdek hatası',
-            E_COMPILE_ERROR => 'Derleme hatası',
-            E_USER_ERROR => 'Uygulama hatası',
-            default => 'Ölümcül hata',
+            E_ERROR => 'Fatal error',
+            E_PARSE => 'Parse error',
+            E_CORE_ERROR => 'Core error',
+            E_COMPILE_ERROR => 'Compile error',
+            E_USER_ERROR => 'User error',
+            default => 'Fatal error',
         };
     }
 
     /**
+     * Sends a liveness request that carries no events.
+     *
      * "Buradayım" — olay taşımayan canlılık isteği.
      *
      * Hub bir kurulumun çalıştığını yalnızca hata gelmesinden anlıyordu ve
@@ -450,6 +475,8 @@ class Recorder
     }
 
     /**
+     * Sends a liveness request if one is due (at most once every 8 hours).
+     *
      * Süresi geldiyse canlılık gönderir.
      *
      * **Zamanlayıcıya bağlanmadı, isteğe bağlandı.** Gerekçe: paket onlarca
@@ -520,7 +547,7 @@ class Recorder
             if ($this->shouldDefer($payload)) {
                 $this->pending[] = $payload;
 
-                return ['sent' => false, 'error' => 'ertelendi'];
+                return ['sent' => false, 'error' => 'deferred'];
             }
 
             return $this->client->send($payload);

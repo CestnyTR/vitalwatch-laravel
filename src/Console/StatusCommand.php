@@ -10,6 +10,9 @@ use Illuminate\Console\Command;
 use RuntimeException;
 
 /**
+ * `php artisan vitalwatch:status` — checks the local VitalWatch setup and,
+ * with `--test` / `--vitalwatch`, sends a test event or a liveness request.
+ *
  * Kurulum teşhisi.
  *
  * Bu komut, paketin en pahalı arıza biçimi için var: **sessiz çalışmama.**
@@ -24,10 +27,10 @@ use RuntimeException;
 class StatusCommand extends Command
 {
     protected $signature = 'vitalwatch:status
-                            {--test : Hub\'a sınama olayı gönderir — panelde hata olarak görünür}
-                            {--vitalwatch : Yalnızca canlılık isteği gönderir — panele hata düşürmez}';
+                            {--test : Send a test event to the hub — shows up as an error in the panel}
+                            {--vitalwatch : Send a liveness request only — no error in the panel}';
 
-    protected $description = 'VitalWatch kurulumunu denetler';
+    protected $description = 'Check the VitalWatch installation';
 
     /** Hub'ın ürettiği secret bu uzunlukta; farklıysa eksik kopyalanmıştır. */
     private const SECRET_LENGTH = 64;
@@ -47,17 +50,17 @@ class StatusCommand extends Command
         | onlarca kurulumda en sık sorulan şey o. Yapılandırma doğru olsa
         | bile eski sürüm eski davranışı sürdürür.
         */
-        $this->row('Paket sürümü', Recorder::version());
+        $this->row('SDK version', Recorder::version());
         $this->updateCheck();
-        $this->row('Etkin', config('vitalwatch.enabled') ? 'evet' : 'HAYIR (VITALWATCH_ENABLED=false)');
-        $this->row('Hub adresi', (string) config('vitalwatch.url') ?: 'TANIMSIZ');
-        $this->row('Proje anahtarı', (string) config('vitalwatch.key') ?: 'TANIMSIZ');
-        $this->row('Secret uzunluğu', $secret === '' ? 'TANIMSIZ' : strlen($secret).' karakter');
+        $this->row('Enabled', config('vitalwatch.enabled') ? 'yes' : 'NO (VITALWATCH_ENABLED=false)');
+        $this->row('Hub URL', (string) config('vitalwatch.url') ?: 'NOT SET');
+        $this->row('Project key', (string) config('vitalwatch.key') ?: 'NOT SET');
+        $this->row('Secret length', $secret === '' ? 'NOT SET' : strlen($secret).' characters');
         $envRaw = (string) (config('vitalwatch.env') ?: app()->environment());
         $envName = Environment::normalize($envRaw);
         $this->row('Environment', $envName === $envRaw ? $envName : "{$envName} ({$envRaw})");
         $release = Release::detect(base_path(), config('vitalwatch.release'));
-        $this->row('Sürüm etiketi', sprintf('%s (kaynak: %s)', $release['value'] ?? 'tanımsız', $release['source']));
+        $this->row('Release tag', sprintf('%s (source: %s)', $release['value'] ?? 'not set', $release['source']));
         $this->newLine();
 
         $problems = $this->problems($secret);
@@ -72,7 +75,7 @@ class StatusCommand extends Command
             return self::FAILURE;
         }
 
-        $this->info('  ✓ Yapılandırma tamam.');
+        $this->info('  ✓ Configuration OK.');
 
         if ($this->option('test') && ! $this->sendProbe()) {
             return self::FAILURE;
@@ -83,9 +86,9 @@ class StatusCommand extends Command
         }
 
         $this->newLine();
-        $this->line('  Verinin gerçekten ulaştığı yalnızca hub panelinden doğrulanır:');
-        $this->line('  proje satırında bağlantı durumu "Bağlı" görünmelidir.');
-        $this->line('  Hub geçersiz imzaya da 204 döner; buradan anlaşılmaz.');
+        $this->line('  Only the hub panel can confirm that data actually arrives:');
+        $this->line('  the connection status on the project\'s row should read "Connected".');
+        $this->line('  The hub answers 204 even to an invalid signature, so this command cannot tell.');
         $this->newLine();
 
         return self::SUCCESS;
@@ -97,13 +100,13 @@ class StatusCommand extends Command
         $problems = [];
 
         if (! config('vitalwatch.enabled')) {
-            $problems[] = 'VITALWATCH_ENABLED=false — hiçbir kanca kurulmaz, hiçbir veri gönderilmez.';
+            $problems[] = 'VITALWATCH_ENABLED=false — no hooks are installed and no data is sent.';
         }
 
         $envRaw = (string) (config('vitalwatch.env') ?: app()->environment());
 
         if (! Environment::accepted(Environment::normalize($envRaw))) {
-            $problems[] = "Ortam \"{$envRaw}\" hub tarafından kabul edilmez — olaylar ve canlılık sessizce reddedilir. VITALWATCH_ENV=production, staging ya da local yazın.";
+            $problems[] = "Environment \"{$envRaw}\" is not accepted by the hub — events and liveness requests are silently dropped. Set VITALWATCH_ENV to production, staging or local.";
         }
 
         $missing = collect(['VITALWATCH_URL' => 'url', 'VITALWATCH_KEY' => 'key', 'VITALWATCH_SECRET' => 'secret'])
@@ -111,21 +114,21 @@ class StatusCommand extends Command
             ->keys();
 
         if ($missing->isNotEmpty()) {
-            $problems[] = $missing->implode(', ').' tanımlı değil.';
+            $problems[] = 'Not set: '.$missing->implode(', ').'.';
         }
 
         if ($secret !== '' && strlen($secret) !== self::SECRET_LENGTH) {
             // En sık hata bu: secret kopyalanırken başı veya sonu eksik
             // kalıyor ve sonuç sessizce hiçbir şey göndermemek oluyor.
             $problems[] = sprintf(
-                'VITALWATCH_SECRET %d karakter olmalı, %d karakter. Eksik kopyalanmış olabilir.',
+                'VITALWATCH_SECRET must be %d characters, got %d. It may have been copied incompletely.',
                 self::SECRET_LENGTH,
                 strlen($secret),
             );
         }
 
         if (str_starts_with((string) config('vitalwatch.url'), 'http://')) {
-            $problems[] = 'VITALWATCH_URL http:// ile başlıyor — secret imzası şifresiz hat üzerinden gider.';
+            $problems[] = 'VITALWATCH_URL starts with http:// — the signed requests travel over an unencrypted connection.';
         }
 
         return $problems;
@@ -154,14 +157,14 @@ class StatusCommand extends Command
         $result = app(Recorder::class)->heartbeat();
 
         if ($result['sent'] ?? false) {
-            $this->info(sprintf('  ✓ Canlılık isteği gönderildi (HTTP %s).', $result['status'] ?? '?'));
+            $this->info(sprintf('  ✓ Liveness request sent (HTTP %s).', $result['status'] ?? '?'));
 
             return true;
         }
 
         $this->error(sprintf(
-            '  ✗ Canlılık isteği GÖNDERİLEMEDİ: %s',
-            $result['error'] ?? 'HTTP '.($result['status'] ?? 'isUnknown'),
+            '  ✗ Liveness request NOT SENT: %s',
+            $result['error'] ?? 'HTTP '.($result['status'] ?? 'unknown'),
         ));
         $this->newLine();
 
@@ -173,18 +176,18 @@ class StatusCommand extends Command
         // Gerçek bir istisna raporlanır: hem taşıma hem de exception kancası
         // aynı anda sınanmış olur.
         $result = app(Recorder::class)->recordException(
-            new RuntimeException('vitalwatch:status --test ile üretilen sınama olayı')
+            new RuntimeException('Test event generated by vitalwatch:status --test')
         );
 
         if ($result['sent'] ?? false) {
-            $this->info(sprintf('  ✓ Sınama olayı gönderildi (HTTP %s).', $result['status'] ?? '?'));
+            $this->info(sprintf('  ✓ Test event sent (HTTP %s).', $result['status'] ?? '?'));
 
             return true;
         }
 
         $this->error(sprintf(
-            '  ✗ Sınama olayı GÖNDERİLEMEDİ: %s',
-            $result['error'] ?? 'HTTP '.($result['status'] ?? 'isUnknown'),
+            '  ✗ Test event NOT SENT: %s',
+            $result['error'] ?? 'HTTP '.($result['status'] ?? 'unknown'),
         ));
         $this->newLine();
 
@@ -209,18 +212,18 @@ class StatusCommand extends Command
         $latest = $packagist->latestStable();
 
         if ($latest === null) {
-            $this->row('Güncel sürüm', 'denetlenemedi');
+            $this->row('Latest version', 'could not check');
 
             return;
         }
 
-        $this->row('Güncel sürüm', $latest);
+        $this->row('Latest version', $latest);
 
         // Kurulu sürüm bilinmiyorsa ya da dev dalıysa karşılaştırılmaz.
         $installed = Packagist::stable($packagist->installed());
 
         if ($installed !== null && Packagist::compare($latest, $installed) > 0) {
-            $this->warn('  ! Güncelleme var: composer require cestnytr/vitalwatch-laravel:'.Packagist::constraint($latest));
+            $this->warn('  ! Update available: composer require cestnytr/vitalwatch-laravel:'.Packagist::constraint($latest));
         }
     }
 
