@@ -32,6 +32,17 @@ jobs:
           php-version: ${{ matrix.php }}
           extensions: curl
           coverage: none
+      # Laravel 11'in bütün sürümlerinde kapatılmamış güvenlik bildirimleri var
+      # (güvenlik desteği bitti) ve Composer onları kurmayı reddediyor. Engel
+      # yalnızca BU test ortamında kalkıyor: amaç paketin L11 ile hâlâ
+      # çalıştığını görmek. Yayınlanan pakete ya da kuran projeye etkisi yok.
+      #
+      # Anahtar Composer sürümüne göre değişiyor: 2.9'da `audit.block-insecure`,
+      # daha yenilerinde `policy.advisories.block`. Hangisi varsa o tutar.
+      - if: matrix.laravel == '11'
+        run: |
+          composer config policy.advisories.block false 2>/dev/null \
+            || composer config audit.block-insecure false
       - run: composer require "orchestra/testbench:${{ matrix.testbench }}" --dev --no-update --no-interaction
       - run: composer update --prefer-dist --no-interaction --no-progress
       - run: ./vendor/bin/pest
