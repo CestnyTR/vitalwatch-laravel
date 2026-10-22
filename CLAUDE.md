@@ -23,6 +23,10 @@ Bu paket **izlenen projelere** kurulur. Hub'ın kendisi ayrı repodadır:
 - **Hiçbir sır koda girmez.** Anahtar ve secret `.env`'den okunur.
 - Örneklerde gerçek anahtar, gerçek alan adı dışında iç bilgi kullanılmaz.
 - MIT lisanslı; Packagist üzerinden dağıtılır.
+- **Sürüm etiketi elle atılmaz.** Packagist etiketi görür görmez yayınlıyor, testleri
+  beklemiyor. CHANGELOG'a `## X.Y.Z` bölümü yazılır, main'e gönderilir, sonra
+  `gh workflow run release.yml -f version=X.Y.Z` — iş akışı testleri koşar ve etiketi
+  ancak testler geçerse oluşturur.
 
 ---
 

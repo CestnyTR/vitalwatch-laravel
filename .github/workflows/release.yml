@@ -1,0 +1,53 @@
+# Sürüm çıkarma — etiketi testler geçtikten SONRA Actions oluşturur.
+#
+# Packagist yayını etikete bağlı ve testleri beklemiyor: elle atılan bir etiket,
+# kırık bir sürümü anında yayına çıkarırdı (npm/PyPI/NuGet iş akışlarında
+# yükleme testten sonra geldiği için bu sorun yok). Burada sıra tersine
+# çevriliyor: önce testler, sonra etiket. Packagist etiketi yine kendisi alır.
+#
+# Kullanım:  gh workflow run release.yml -f version=0.2.7
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Sürüm (v öneki olmadan), örn. 0.2.7"
+        required: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Sürüm biçimi, CHANGELOG bölümü ve etiketin yokluğu
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "Geçersiz sürüm: $VERSION"; exit 1; }
+          grep -Eq "^## $VERSION\b" CHANGELOG.md || { echo "CHANGELOG.md'de '## $VERSION' bölümü yok"; exit 1; }
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then echo "v$VERSION zaten var"; exit 1; fi
+          test "$GITHUB_REF_NAME" = "main" || { echo "Sürüm yalnızca main'den çıkar ($GITHUB_REF_NAME)"; exit 1; }
+
+  tests:
+    needs: check
+    uses: ./.github/workflows/tests.yml
+
+  tag:
+    needs: tests
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      # Etiket test edilen commit'e atılır: çalıştırma sırasında main ilerlemiş
+      # olsa da yayına giden, testten geçen koddur.
+      - name: Etiketi oluştur ve gönder
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git tag "v$VERSION" "$GITHUB_SHA"
+          git push origin "v$VERSION"
+          echo "v$VERSION etiketlendi; Packagist birkaç dakika içinde alır." >> "$GITHUB_STEP_SUMMARY"

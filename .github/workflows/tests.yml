@@ -1,15 +1,15 @@
 # Testler — her push'ta desteklenen PHP ve Laravel sürümlerinde.
 #
-# Yayın burada YOK: Packagist GitHub'ı izliyor, `v*` etiketi gönderildiğinde
-# yeni sürüm kendiliğinden görünür. Bu yüzden etiketten ÖNCE bu iş akışının
-# yeşil olduğuna bakılmalı — Packagist testleri beklemez.
+# Yayın burada YOK: Packagist GitHub'ı izliyor ve `v*` etiketi göründüğü an
+# yeni sürümü yayınlıyor — testleri beklemez. Bu yüzden etiket elle atılmaz;
+# `release.yml` bu iş akışını çağırır ve etiketi ancak testler geçerse oluşturur.
 name: tests
 
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
+  workflow_call:
 
 jobs:
   test:
