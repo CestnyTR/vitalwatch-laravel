@@ -16,6 +16,24 @@ composer require cestnytr/vitalwatch-laravel
 
 ---
 
+## 0.2.5
+
+### Değişti
+
+- **Düz CamelCase adlar artık `[token]` olmuyor.** Uzun dizi maskesi
+  (24+ karakter) `InvalidOperationException`,
+  `HandleNonSuccessAndDebuggerNotification` gibi sınıf ve metot adlarını da
+  jeton sanıyor, yığın izleri okunmaz oluyordu. Rakam, `-`/`_` taşımayan ve
+  `^[A-Za-z][a-z]+(?:[A-Z][a-z]+)+$` desenine tamamen uyan aday jeton
+  sayılmıyor. Gerçek jeton ve oturum kimlikleri neredeyse hep rakam taşır;
+  rakamlı, ardışık büyük harfli ya da tümü büyük harf diziler eskisi gibi
+  maskelenir. Kural hub ve öbür SDK'larla birebir aynı.
+- **Parmak izi yan etkisi:** böyle bir ad içeren hata mesajları yükseltmeden
+  sonra bir kez yeni parmak izi altında toplanır; panelde yeni satır açılır
+  ve bir kez "yeni hata" uyarısı gelebilir.
+
+---
+
 ## 0.2.4
 
 ### Eklendi

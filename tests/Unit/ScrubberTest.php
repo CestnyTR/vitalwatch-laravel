@@ -121,6 +121,28 @@ test('rastgele diziler yeni kuralla da maskelenir', function (string $input) {
     ['x a1b2c3d4-e5f6a7b8-c9d0e1f2-a3b4c5d6 y'],
 ]);
 
+/*
+| .NET yığın izlerindeki uzun sınıf/metot adları `[token]` oluyordu (22 Ekim
+| 2026). Düz CamelCase ad jeton sayılmıyor; rakam, ardışık büyük harf ya da
+| tümü büyük harf taşıyan diziler eski kurala düşüyor.
+*/
+test('düz CamelCase adlar jeton sanılmaz', function (string $input) {
+    expect(Scrubber::text($input, 500))->toBe($input);
+})->with([
+    ['InvalidOperationException'],
+    ['HandleNonSuccessAndDebuggerNotification'],
+    ['System.InvalidOperationException: boom'],
+]);
+
+test('CamelCase istisnası rastgele dizileri kaçırmaz', function (string $input) {
+    expect(Scrubber::text($input, 500))->toBe('x [token] y');
+})->with([
+    ['x aB3dE5fG7hJ9kL1mN3pQ5rS7 y'],
+    ['x ABCDEFGHIJKLMNOPQRSTUVWXYZ y'],
+    ['x 5d41402abc4b2a76b9719d91 y'],
+    ['x abcDEfghIJklmnOPqrsTUvwxYZab y'],
+]);
+
 // Eposta deseni `/u` bayraklı; geçersiz baytta desen sessizce atlanıyordu.
 test('geçersiz UTF-8 taşıyan metinde eposta yine maskelenir', function () {
     expect(Scrubber::message("SQLSTATE: ahmet@ornek.com \xff", true))->toBe('SQLSTATE: [email] ?');

@@ -114,6 +114,15 @@ class Scrubber
      */
     private static function isToken(string $candidate): bool
     {
+        // Düz CamelCase/camelCase ad jeton değildir: gerçek jeton ve oturum
+        // kimlikleri neredeyse hep rakam taşır; rakamsız, yan yana iki büyük
+        // harfi olmayan ve küçük harfle biten 24+ karakterlik rastgele dizinin
+        // olasılığı 1/10.000'in çok altında. .NET'in `InvalidOperationException`
+        // gibi adları maskeleniyor, yığın izleri okunmaz oluyordu.
+        if (preg_match('/^[A-Za-z][a-z]+(?:[A-Z][a-z]+)+$/D', $candidate) === 1) {
+            return false;
+        }
+
         $parts = preg_split('/[-_]/', $candidate) ?: [];
 
         if (max(array_map('strlen', $parts)) >= 16) {
