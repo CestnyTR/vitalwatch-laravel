@@ -622,24 +622,38 @@ class Recorder
 
     /**
      * What `vitalwatch:status` shows: package count (null when composer.lock
-     * is missing) and the time of the last successful send.
+     * is missing), the time of the last successful send and whether the cache
+     * that stores it could be read.
      *
-     * @return array{packages: ?int, sent_at: ?int}
+     * @return array{packages: ?int, sent_at: ?int, cache: bool}
      */
     public function dependencyInfo(): array
     {
         try {
             $path = $this->config['lock_path'] ?? null;
             $list = is_string($path) ? Dependencies::load($path) : null;
-            $state = Cache::get($this->dependencyKey());
-
-            return [
-                'packages' => $list !== null ? count($list['packages']) : null,
-                'sent_at' => is_array($state) && isset($state['sent_at']) ? (int) $state['sent_at'] : null,
-            ];
         } catch (Throwable) {
-            return ['packages' => null, 'sent_at' => null];
+            $list = null;
         }
+
+        /*
+         * Önbellek okuması AYRI: önbellek sürücüsü ulaşılamazken (yerelde
+         * kapalı veritabanı gibi) hata, dosya okunamamış gibi görünüyordu ve
+         * durum komutu "composer.lock not found" diyordu — yanlış teşhis.
+         */
+        try {
+            $state = Cache::get($this->dependencyKey());
+            $cache = true;
+        } catch (Throwable) {
+            $state = null;
+            $cache = false;
+        }
+
+        return [
+            'packages' => $list !== null ? count($list['packages']) : null,
+            'sent_at' => is_array($state) && isset($state['sent_at']) ? (int) $state['sent_at'] : null,
+            'cache' => $cache,
+        ];
     }
 
     /** Durum kaydının ömrü; 24 saatlik yeniden gönderimden uzun olmalı. */

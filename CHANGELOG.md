@@ -16,6 +16,15 @@ composer require cestnytr/vitalwatch-laravel
 
 ---
 
+## 0.3.1
+
+### Fixed
+
+- `vitalwatch:status` reported `composer.lock not found` when the cache store could not be
+  read (for example a database cache with the database unreachable on a local machine).
+  The package count is now shown regardless, and the last-send part reads
+  `last send unknown (cache unavailable)`.
+
 ## 0.3.0
 
 ### Added

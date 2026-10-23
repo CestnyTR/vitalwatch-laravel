@@ -201,7 +201,11 @@ class StatusCommand extends Command
             'composer.lock · %d %s · %s',
             $info['packages'],
             $info['packages'] === 1 ? 'package' : 'packages',
-            $info['sent_at'] === null ? 'not sent yet' : 'last sent '.self::ago(now()->getTimestamp() - $info['sent_at']),
+            match (true) {
+                ! $info['cache'] => 'last send unknown (cache unavailable)',
+                $info['sent_at'] === null => 'not sent yet',
+                default => 'last sent '.self::ago(now()->getTimestamp() - $info['sent_at']),
+            },
         );
     }
 

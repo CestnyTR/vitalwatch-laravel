@@ -231,6 +231,18 @@ describe('bağımlılık listesi', function () {
             ->assertSuccessful();
     });
 
+    test('önbellek okunamazsa dosya bulunamadı denmez, paket sayısı yine yazılır', function () {
+        // Yerelde kapalı veritabanı önbelleği gibi: eskiden "composer.lock not found" yazıyordu.
+        Cache::partialMock()
+            ->shouldReceive('get')
+            ->andThrow(new RuntimeException('cache down'));
+
+        $this->artisan('vitalwatch:status')
+            ->expectsOutputToContain('composer.lock · 2 packages · last send unknown (cache unavailable)')
+            ->doesntExpectOutputToContain('composer.lock not found')
+            ->assertSuccessful();
+    });
+
     test('kapalıysa disabled yazılır ve --deps göndermez', function () {
         config(['vitalwatch.dependencies' => false]);
 
