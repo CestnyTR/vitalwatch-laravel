@@ -9,6 +9,9 @@ use Throwable;
  * dependency advisory check. Only package names and installed versions leave
  * the application. Never throws.
  *
+ * `package-lock.json` is parsed by {@see NpmDependencies}; reading, caching,
+ * hashing and scheduling are shared.
+ *
  * Bağımlılık listesi — dört SDK'da aynı sözleşme (v1).
  *
  * Hub listeyi OSV.dev'e karşı denetliyor. Gönderilen tek şey üretim
@@ -35,7 +38,7 @@ class Dependencies
     /** Liste değişmese de günde bir kez yeniden gönderilir. */
     public const INTERVAL_SECONDS = 86400;
 
-    /** Bundan büyük kilit dosyası okunmaz; olağan composer.lock 1 MB'ın altında. */
+    /** Bundan büyük kilit dosyası okunmaz; olağan composer.lock 1 MB'ın, package-lock.json birkaç MB'ın altında. */
     private const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
     /**
@@ -44,9 +47,16 @@ class Dependencies
      * değiştirince anahtar da değişir, eski liste raporlanmaz (Release'teki
      * "işçi deploy'dan sağ çıktı" tuzağı burada yok).
      *
-     * @var array{key: string, list: ?array}|null
+     * Yol başına bir kayıt: composer.lock ve package-lock.json aynı süreçte
+     * sırayla okunuyor; tek kayıt olsaydı her denetimde birbirini silip iki
+     * dosyayı da yeniden ayrıştırırlardı.
+     *
+     * @var array<string, array{fingerprint: string, list: ?array}>
      */
-    private static ?array $memo = null;
+    private static array $memo = [];
+
+    /** Bellek sınırı — olağan kurulumda iki yol var; fazlası test ya da tuhaf kullanım. */
+    private const MEMO_LIMIT = 8;
 
     /**
      * Dosyanın parmak izi (`mtime:boyut`); dosya yoksa ya da okunamıyorsa null.
@@ -82,6 +92,18 @@ class Dependencies
      */
     public static function load(string $path): ?array
     {
+        return self::read($path, self::parse(...));
+    }
+
+    /**
+     * Ortak okuma yolu (composer.lock ve package-lock.json): parmak izi,
+     * boyut sınırı ve süreç içi önbellek. Ayrıştırıcı manifeste özgü.
+     *
+     * @param  \Closure(string): ?array  $parser
+     * @return array{packages: list<array{name: string, version: string}>, hash: string}|null
+     */
+    public static function read(string $path, \Closure $parser): ?array
+    {
         try {
             $fingerprint = self::fingerprint($path);
 
@@ -89,20 +111,22 @@ class Dependencies
                 return null;
             }
 
-            $key = $path.'|'.$fingerprint;
-
-            if (self::$memo !== null && self::$memo['key'] === $key) {
-                return self::$memo['list'];
+            if (isset(self::$memo[$path]) && self::$memo[$path]['fingerprint'] === $fingerprint) {
+                return self::$memo[$path]['list'];
             }
 
             $list = null;
 
             if ((int) @filesize($path) <= self::MAX_FILE_BYTES) {
                 $content = @file_get_contents($path);
-                $list = is_string($content) ? self::parse($content) : null;
+                $list = is_string($content) ? $parser($content) : null;
             }
 
-            self::$memo = ['key' => $key, 'list' => $list];
+            if (count(self::$memo) >= self::MEMO_LIMIT && ! isset(self::$memo[$path])) {
+                self::$memo = [];
+            }
+
+            self::$memo[$path] = ['fingerprint' => $fingerprint, 'list' => $list];
 
             return $list;
         } catch (Throwable) {
@@ -201,12 +225,12 @@ class Dependencies
      * @param  array{packages: list<array{name: string, version: string}>, hash: string}  $list
      * @return array<string, mixed>
      */
-    public static function payload(array $list): array
+    public static function payload(array $list, string $ecosystem = self::ECOSYSTEM, string $manifest = self::MANIFEST): array
     {
         return [
             'v' => self::VERSION,
-            'ecosystem' => self::ECOSYSTEM,
-            'manifest' => self::MANIFEST,
+            'ecosystem' => $ecosystem,
+            'manifest' => $manifest,
             'hash' => $list['hash'],
             'packages' => $list['packages'],
         ];
@@ -230,6 +254,6 @@ class Dependencies
     /** Testler için: süreç içi ayrıştırma önbelleğini boşaltır. */
     public static function forget(): void
     {
-        self::$memo = null;
+        self::$memo = [];
     }
 }

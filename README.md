@@ -30,7 +30,8 @@ VITALWATCH_URL=https://vitalwatch.example.com
 VITALWATCH_KEY=project-key
 VITALWATCH_SECRET=...
 VITALWATCH_ENV=production
-# VITALWATCH_DEPENDENCIES=false   # optional: stop sending the dependency list (see "Dependency advisories")
+# VITALWATCH_DEPENDENCIES=false       # optional: stop sending the dependency lists (see "Dependency advisories")
+# VITALWATCH_DEPENDENCIES_NPM=false   # optional: stop sending only the package-lock.json list
 ```
 
 The service provider is loaded automatically through Laravel package discovery; no manual registration
@@ -43,7 +44,7 @@ php artisan vitalwatch:status
 ```
 
 ```text
-  SDK version        0.3.0
+  SDK version        v0.4.0
   Latest version     0.3.0
   Enabled            yes
   Hub URL            https://hub.example.com
@@ -51,7 +52,8 @@ php artisan vitalwatch:status
   Secret length      64 characters
   Environment        production
   Release tag        3f2a1b4c5d6e (source: .git)
-  Dependencies       composer.lock · 142 packages · last sent 3 h ago
+  Dependencies       composer.lock · 126 packages · last sent 3 h ago
+                     package-lock.json · 214 packages · not sent yet
 
   ✓ Configuration OK.
 
@@ -80,7 +82,7 @@ a hub URL without HTTPS. Also (0.2.3+):
 ```bash
 php artisan vitalwatch:status --test         # sends a test event to the hub — shows up as an error in the panel
 php artisan vitalwatch:status --vitalwatch   # liveness request only — no error in the panel
-php artisan vitalwatch:status --deps         # sends the dependency list now and prints the HTTP status
+php artisan vitalwatch:status --deps         # sends the dependency lists now and prints one HTTP status per lock file
 ```
 
 `--test` is the right choice when verifying a single installation. Use `--vitalwatch` in an update loop
@@ -193,43 +195,59 @@ Nothing is sent while `VITALWATCH_ENABLED=false` or when the configuration is in
 
 ## Dependency advisories
 
-(0.3.0+) The package sends the hub the list of your **production** Composer packages, and the hub
-checks it against the [OSV.dev](https://osv.dev) vulnerability database and alerts you per project.
+(0.3.0+, npm since 0.4.0) The package sends the hub the list of your **production** dependencies,
+and the hub checks it against the [OSV.dev](https://osv.dev) vulnerability database and alerts you
+per project. Two lists are sent, each on its own:
 
-**What is sent** — only package names and installed versions, from the `packages` section of
-`composer.lock`. `packages-dev`, paths, source URLs, scripts and anything else in the file are never
-read into the request. Branch versions (`dev-main`, `2.x-dev`) are skipped because they have no
-advisories; a leading `v` is stripped (`v7.1.0` → `7.1.0`); at most 5000 packages.
+| Lock file | Ecosystem | What is read |
+|---|---|---|
+| `composer.lock` | `Packagist` | The `packages` section — `packages-dev` never. Branch versions (`dev-main`, `2.x-dev`) are skipped because they have no advisories; a leading `v` is stripped (`v7.1.0` → `7.1.0`) |
+| `package-lock.json` | `npm` | The npm packages a Vite/React front-end bundles into the JavaScript served to visitors. Packages marked `dev` are skipped, as are local links (`link`, `file:`) and your own workspace folders; optional packages are kept; aliases (`npm:real-name@1`) are reported under the real name; nested copies with a different version are all reported. lockfileVersion 1, 2 and 3 are supported |
+
+**What is sent** — only package names and installed versions, at most 5000 per list, sorted with
+a sha256 hash of the canonical `name@version` lines (the same algorithm as the other VitalWatch
+SDKs). Paths, source URLs, scripts, integrity hashes and anything else in the lock files are never
+read into the request.
 
 ```json
 {
   "env": "production",
   "release": "3f2a1b4c5d6e",
   "php_version": "8.4.1",
-  "sdk_version": "0.3.0",
+  "sdk_version": "0.4.0",
   "framework_version": "12.1.0",
   "dependencies": {
     "v": 1,
-    "ecosystem": "Packagist",
-    "manifest": "composer.lock",
+    "ecosystem": "npm",
+    "manifest": "package-lock.json",
     "hash": "<sha256 of the sorted name@version lines>",
-    "packages": [{ "name": "guzzlehttp/guzzle", "version": "7.8.1" }]
+    "packages": [{ "name": "zod", "version": "3.22.2" }]
   }
 }
 ```
 
+The `composer.lock` body is the same with `"ecosystem": "Packagist"` and `"manifest": "composer.lock"`.
+The hub keeps one list per project, environment and ecosystem, so the two lists live side by side.
+
 | | |
 |---|---|
-| Endpoint | `POST /api/i/{key}/deps`, signed like events |
-| When | At most once a day per environment, and right after `composer.lock` changes (e.g. a deploy) |
+| Endpoint | `POST /api/i/{key}/deps`, signed like events, one request per lock file |
+| When | Each list at most once a day per environment, and right after its lock file changes (e.g. a deploy) |
 | Triggered by | The same hooks as the liveness ping — after the response in `terminate()`, after queue jobs and scheduled tasks |
-| Cost per request | One cache read and one `stat` of `composer.lock`; the file is parsed only when it changed or a day has passed |
-| No `composer.lock` | Nothing is sent and nothing is logged |
-| Hub unreachable | Given up silently; retried after an hour at the earliest |
+| Cost per request | One cache read and one `stat` per lock file; a file is parsed only when it changed or a day has passed |
+| Lock file missing | That list is skipped; nothing is logged |
+| Too large | Lock files over 20 MB are not read; a request body over 512 KB is not sent |
+| Hub unreachable | Given up silently; that list is retried after an hour at the earliest |
 
-Turn off just this feature with `VITALWATCH_DEPENDENCIES=false`. Nothing is sent while
-`VITALWATCH_ENABLED=false` either. `php artisan vitalwatch:status` shows the state on the
-`Dependencies` line; `--deps` sends the list immediately. `--test` never sends it.
+**pnpm, Yarn and Bun** — only `package-lock.json` is read. `pnpm-lock.yaml`, `yarn.lock` and
+`bun.lock(b)` need their own parsers, and this package adds no dependencies. In those projects the
+npm list is simply not sent and `vitalwatch:status` shows `package-lock.json not found`.
+
+`VITALWATCH_DEPENDENCIES=false` turns off both lists; `VITALWATCH_DEPENDENCIES_NPM=false` turns off
+only the `package-lock.json` list. Nothing is sent while `VITALWATCH_ENABLED=false` either.
+`php artisan vitalwatch:status` shows one `Dependencies` line per lock file; `--deps` sends both
+immediately and prints one result line each (the command fails if a lock file that was found could
+not be sent, or if neither exists). `--test` never sends them.
 
 ---
 
@@ -274,7 +292,8 @@ In `config/vitalwatch.php`:
 | `ignore` | 6 classes¹ | Exception classes that are not reported (subclasses match too) |
 | `timeout` | 2 | Hub timeout in **seconds**. Values of 100 and above are treated as milliseconds; clamped to 0.1–10 s² |
 | `release` | `VITALWATCH_RELEASE`, otherwise automatic³ | Release tag showing which deploy introduced an error |
-| `dependencies` | `true` (`VITALWATCH_DEPENDENCIES`) | Send the production dependency list for [vulnerability checks](#dependency-advisories) |
+| `dependencies` | `true` (`VITALWATCH_DEPENDENCIES`) | Send the production dependency lists (`composer.lock`, `package-lock.json`) for [vulnerability checks](#dependency-advisories) |
+| `dependencies_npm` | `true` (`VITALWATCH_DEPENDENCIES_NPM`) | Set to `false` to stop sending only the `package-lock.json` list |
 | `env` | `VITALWATCH_ENV`, otherwise `APP_ENV` | `production` · `staging` · `local`. Aliases are mapped: `prod`/`live` → production, `stage`/`stg`/`preprod`/`uat` → staging, `dev`/`development`/`test`/`testing` → local. The hub rejects unrecognized values; the diagnostic command reports an error |
 
 ¹ `AuthenticationException`, `AuthorizationException`, `ValidationException`,

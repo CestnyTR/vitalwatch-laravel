@@ -78,14 +78,20 @@ return [
     |--------------------------------------------------------------------------
     |
     | Sends the names and installed versions of your production packages
-    | (the `packages` section of composer.lock, not `packages-dev`) so the hub
-    | can check them against known vulnerabilities. Sent after the response,
-    | at most once a day and whenever composer.lock changes. Nothing else is
-    | sent. Set to false to turn off just this feature.
+    | so the hub can check them against known vulnerabilities: the `packages`
+    | section of composer.lock (not `packages-dev`) and, if present, the
+    | non-dev packages of package-lock.json (the npm packages bundled into
+    | your front-end). Each list is sent after the response, at most once a
+    | day and whenever its lock file changes. Nothing else is sent.
+    |
+    | `dependencies` turns off both lists; `dependencies_npm` turns off only
+    | the package-lock.json list.
     |
     */
 
     'dependencies' => (bool) env('VITALWATCH_DEPENDENCIES', true),
+
+    'dependencies_npm' => (bool) env('VITALWATCH_DEPENDENCIES_NPM', true),
 
     /*
     |--------------------------------------------------------------------------

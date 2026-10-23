@@ -3,6 +3,7 @@
 namespace CestnyTR\VitalWatch;
 
 use CestnyTR\VitalWatch\Support\Dependencies;
+use CestnyTR\VitalWatch\Support\ManifestSource;
 use CestnyTR\VitalWatch\Support\Scrubber;
 use CestnyTR\VitalWatch\Transport\HubClient;
 use Composer\InstalledVersions;
@@ -526,15 +527,16 @@ class Recorder
     }
 
     /**
-     * Sends the production dependency list if it is due: never sent, changed
-     * (e.g. after a deploy) or last sent 24 hours ago. Called after the
-     * response, from the same hooks as the liveness ping.
+     * Sends each production dependency list (`composer.lock`, `package-lock.json`)
+     * that is due: never sent, changed (e.g. after a deploy) or last sent 24 hours
+     * ago. Called after the response, from the same hooks as the liveness ping.
      *
-     * Bağımlılık listesi, süresi geldiyse.
+     * Bağımlılık listeleri, süresi geldiyse.
      *
-     * Olağan istekte maliyet: bir önbellek okuması ve bir `stat`. Dosya
-     * yalnızca parmak izi (mtime + boyut) değiştiyse ya da 24 saat dolduysa
-     * ayrıştırılır.
+     * Olağan istekte maliyet: kaynak başına bir önbellek okuması ve bir
+     * `stat`. Dosya yalnızca parmak izi (mtime + boyut) değiştiyse ya da 24
+     * saat dolduysa ayrıştırılır. Kaynaklar birbirinden bağımsız: biri
+     * başarısız olsa ya da hata verse öteki yine denenir.
      */
     public function dependenciesIfDue(): void
     {
@@ -543,16 +545,28 @@ class Recorder
                 return;
             }
 
-            $path = $this->config['lock_path'] ?? null;
-            $fingerprint = is_string($path) ? Dependencies::fingerprint($path) : null;
+            foreach ($this->dependencySources() as $source) {
+                if ($source->enabled) {
+                    $this->sourceIfDue($source);
+                }
+            }
+        } catch (Throwable) {
+            // Kendi hatasını raporlamaz.
+        }
+    }
 
-            // composer.lock yok ya da okunamıyor: hiçbir şey yapılmaz, log da yok.
+    private function sourceIfDue(ManifestSource $source): void
+    {
+        try {
+            $fingerprint = $source->fingerprint();
+
+            // Kilit dosyası yok ya da okunamıyor: hiçbir şey yapılmaz, log da yok.
             if ($fingerprint === null) {
                 return;
             }
 
             $now = now()->getTimestamp();
-            $key = $this->dependencyKey();
+            $key = $this->dependencyKey($source);
             $state = Cache::get($key);
             $state = is_array($state) ? $state : null;
 
@@ -563,7 +577,7 @@ class Recorder
                 return;
             }
 
-            $list = Dependencies::load($path);
+            $list = $source->load();
 
             if ($list === null) {
                 return;
@@ -581,13 +595,13 @@ class Recorder
             | Deploy sonrası eşzamanlı istekler aynı listeyi birden çok kez
             | göndermesin. Kilit gönderim başarılıysa kaldırılır; hub
             | erişilemiyorsa bir saat durur — her istekte zaman aşımı
-            | beklenmez (garanti 4).
+            | beklenmez (garanti 4). Kilit kaynak başına.
             */
             if (! Cache::add($key.':lock', true, now()->addHour())) {
                 return;
             }
 
-            $result = $this->postDependencies($list, $fingerprint);
+            $result = $this->postDependencies($source, $list, $fingerprint);
 
             if ($result['sent'] ?? false) {
                 Cache::forget($key.':lock');
@@ -598,62 +612,103 @@ class Recorder
     }
 
     /**
-     * Sends the dependency list now, regardless of the schedule (`vitalwatch:status --deps`).
+     * Sends every enabled dependency list now, regardless of the schedule
+     * (`vitalwatch:status --deps`). One result per manifest, keyed by manifest
+     * file name; `found` is false when the file is missing (nothing sent).
      *
-     * @return array{sent: bool, status?: int, error?: string, packages?: int}
+     * @return array<string, array{manifest: string, enabled: bool, found: bool, sent: bool, status?: int, error?: string, packages?: int}>
      */
     public function sendDependencies(): array
     {
-        try {
-            $path = $this->config['lock_path'] ?? null;
-            $list = is_string($path) ? Dependencies::load($path) : null;
+        $results = [];
 
-            if ($list === null) {
-                return ['sent' => false, 'error' => 'composer.lock not found'];
+        foreach ($this->dependencySources() as $source) {
+            $base = ['manifest' => $source->manifest, 'enabled' => $source->enabled, 'found' => false, 'sent' => false];
+
+            if (! $source->enabled) {
+                $results[$source->manifest] = [...$base, 'error' => 'disabled'];
+
+                continue;
             }
 
-            $result = $this->postDependencies($list, (string) Dependencies::fingerprint($path));
+            try {
+                $list = $source->load();
 
-            return [...$result, 'packages' => count($list['packages'])];
-        } catch (Throwable $e) {
-            return ['sent' => false, 'error' => $e->getMessage()];
+                if ($list === null) {
+                    $results[$source->manifest] = [...$base, 'error' => $source->manifest.' not found'];
+
+                    continue;
+                }
+
+                $result = $this->postDependencies($source, $list, (string) $source->fingerprint());
+
+                $results[$source->manifest] = [...$base, ...$result, 'found' => true, 'packages' => count($list['packages'])];
+            } catch (Throwable $e) {
+                $results[$source->manifest] = [...$base, 'found' => true, 'error' => $e->getMessage()];
+            }
         }
+
+        return $results;
     }
 
     /**
-     * What `vitalwatch:status` shows: package count (null when composer.lock
-     * is missing), the time of the last successful send and whether the cache
-     * that stores it could be read.
+     * What `vitalwatch:status` shows, per manifest: whether it is enabled, the
+     * package count (null when the file is missing), the time of the last
+     * successful send and whether the cache that stores it could be read.
      *
-     * @return array{packages: ?int, sent_at: ?int, cache: bool}
+     * @return array<string, array{manifest: string, enabled: bool, packages: ?int, sent_at: ?int, cache: bool}>
      */
     public function dependencyInfo(): array
     {
-        try {
-            $path = $this->config['lock_path'] ?? null;
-            $list = is_string($path) ? Dependencies::load($path) : null;
-        } catch (Throwable) {
-            $list = null;
+        $info = [];
+
+        foreach ($this->dependencySources() as $source) {
+            $list = $source->enabled ? $source->load() : null;
+
+            /*
+             * Önbellek okuması AYRI: önbellek sürücüsü ulaşılamazken (yerelde
+             * kapalı veritabanı gibi) hata, dosya okunamamış gibi görünüyordu ve
+             * durum komutu "composer.lock not found" diyordu — yanlış teşhis.
+             */
+            try {
+                $state = Cache::get($this->dependencyKey($source));
+                $cache = true;
+            } catch (Throwable) {
+                $state = null;
+                $cache = false;
+            }
+
+            $info[$source->manifest] = [
+                'manifest' => $source->manifest,
+                'enabled' => $source->enabled,
+                'packages' => $list !== null ? count($list['packages']) : null,
+                'sent_at' => is_array($state) && isset($state['sent_at']) ? (int) $state['sent_at'] : null,
+                'cache' => $cache,
+            ];
         }
 
-        /*
-         * Önbellek okuması AYRI: önbellek sürücüsü ulaşılamazken (yerelde
-         * kapalı veritabanı gibi) hata, dosya okunamamış gibi görünüyordu ve
-         * durum komutu "composer.lock not found" diyordu — yanlış teşhis.
-         */
-        try {
-            $state = Cache::get($this->dependencyKey());
-            $cache = true;
-        } catch (Throwable) {
-            $state = null;
-            $cache = false;
+        return $info;
+    }
+
+    /**
+     * Raporlanan kilit dosyaları: composer.lock her zaman, package-lock.json
+     * `npm_lock_path` verildiyse (sağlayıcı verir). `dependencies_npm=false`
+     * yalnızca npm listesini kapatır.
+     *
+     * @return list<ManifestSource>
+     */
+    private function dependencySources(): array
+    {
+        $composer = $this->config['lock_path'] ?? null;
+        $npm = $this->config['npm_lock_path'] ?? null;
+
+        $sources = [ManifestSource::composer(is_string($composer) ? $composer : null)];
+
+        if (is_string($npm)) {
+            $sources[] = ManifestSource::npm($npm, (bool) ($this->config['dependencies_npm'] ?? true));
         }
 
-        return [
-            'packages' => $list !== null ? count($list['packages']) : null,
-            'sent_at' => is_array($state) && isset($state['sent_at']) ? (int) $state['sent_at'] : null,
-            'cache' => $cache,
-        ];
+        return $sources;
     }
 
     /** Durum kaydının ömrü; 24 saatlik yeniden gönderimden uzun olmalı. */
@@ -663,15 +718,15 @@ class Recorder
      * @param  array{packages: list<array{name: string, version: string}>, hash: string}  $list
      * @return array{sent: bool, status?: int, error?: string}
      */
-    private function postDependencies(array $list, string $fingerprint): array
+    private function postDependencies(ManifestSource $source, array $list, string $fingerprint): array
     {
         $result = $this->client->sendDependencies([
             ...array_filter($this->identity(), fn ($v) => $v !== null),
-            'dependencies' => Dependencies::payload($list),
+            'dependencies' => $source->payload($list),
         ]);
 
         if ($result['sent'] ?? false) {
-            Cache::put($this->dependencyKey(), [
+            Cache::put($this->dependencyKey($source), [
                 'hash' => $list['hash'],
                 'sent_at' => now()->getTimestamp(),
                 'fingerprint' => $fingerprint,
@@ -681,10 +736,13 @@ class Recorder
         return $result;
     }
 
-    /** Proje ve ortam bazlı: aynı önbelleği paylaşan kurulumlar birbirini bastırmaz. */
-    private function dependencyKey(): string
+    /**
+     * Proje, ortam ve kaynak bazlı: aynı önbelleği paylaşan kurulumlar
+     * birbirini, composer ve npm listeleri de birbirini bastırmaz.
+     */
+    private function dependencyKey(ManifestSource $source): string
     {
-        return 'vitalwatch:deps:'.($this->config['key'] ?? 'unknown').':'.($this->config['env'] ?? 'unknown');
+        return $source->stateKey('vitalwatch:deps:'.($this->config['key'] ?? 'unknown').':'.($this->config['env'] ?? 'unknown'));
     }
 
     /**

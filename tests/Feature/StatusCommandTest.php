@@ -256,7 +256,7 @@ describe('bağımlılık listesi', function () {
 
     test('--deps listeyi hemen gönderir ve HTTP durumunu yazar', function () {
         $this->artisan('vitalwatch:status --deps')
-            ->expectsOutputToContain('Dependency list sent (2 packages, HTTP 204).')
+            ->expectsOutputToContain('Dependency list sent (composer.lock, 2 packages, HTTP 204).')
             ->assertSuccessful();
 
         expect($this->hub->deps)->toHaveCount(1)
@@ -267,8 +267,121 @@ describe('bağımlılık listesi', function () {
         $this->hub->up = false;
 
         $this->artisan('vitalwatch:status --deps')
-            ->expectsOutputToContain('Dependency list NOT SENT: Could not resolve host')
+            ->expectsOutputToContain('Dependency list NOT SENT (composer.lock): Could not resolve host')
             ->assertFailed();
+    });
+
+    test('iki satır: composer.lock ve package-lock.json aynı sütunda', function () {
+        $npm = tempnam(sys_get_temp_dir(), 'vw-npm');
+        writeNpmLock($npm, ['node_modules/zod' => '3.22.2', 'node_modules/react' => '19.0.0', 'node_modules/vite' => ['version' => '6.0.0', 'dev' => true]]);
+        app()->instance(Recorder::class, depsRecorder($this->hub, $this->lock, npmLockPath: $npm));
+
+        // Yalnızca composer gönderilmiş.
+        depsRecorder($this->hub, $this->lock)->dependenciesIfDue();
+        $this->travel(3)->hours();
+
+        $this->artisan('vitalwatch:status')
+            ->expectsOutputToContain('  Dependencies       composer.lock · 2 packages · last sent 3 h ago')
+            ->expectsOutputToContain('                     package-lock.json · 2 packages · not sent yet')
+            ->assertSuccessful();
+
+        @unlink($npm);
+    });
+
+    test('package-lock.json yoksa ikinci satır söyler', function () {
+        app()->instance(Recorder::class, depsRecorder($this->hub, $this->lock, npmLockPath: sys_get_temp_dir().'/vw-none-'.uniqid().'/package-lock.json'));
+
+        $this->artisan('vitalwatch:status')
+            ->expectsOutputToContain('composer.lock · 2 packages · not sent yet')
+            ->expectsOutputToContain('                     package-lock.json not found')
+            ->assertSuccessful();
+    });
+
+    test('yalnızca npm kapalıysa ikinci satır disabled yazar', function () {
+        $npm = tempnam(sys_get_temp_dir(), 'vw-npm');
+        writeNpmLock($npm, ['node_modules/zod' => '3.22.2']);
+        app()->instance(Recorder::class, depsRecorder($this->hub, $this->lock, npmLockPath: $npm, npm: false));
+
+        $this->artisan('vitalwatch:status --deps')
+            ->expectsOutputToContain('package-lock.json · disabled (VITALWATCH_DEPENDENCIES_NPM=false)')
+            ->expectsOutputToContain('Dependency list sent (composer.lock, 2 packages, HTTP 204).')
+            ->expectsOutputToContain('package-lock.json skipped: disabled')
+            ->assertSuccessful();
+
+        expect($this->hub->deps)->toHaveCount(1);
+        @unlink($npm);
+    });
+
+    test('önbellek okunamazsa iki satırda da cache unavailable yazılır', function () {
+        $npm = tempnam(sys_get_temp_dir(), 'vw-npm');
+        writeNpmLock($npm, ['node_modules/zod' => '3.22.2']);
+        app()->instance(Recorder::class, depsRecorder($this->hub, $this->lock, npmLockPath: $npm));
+        Cache::partialMock()->shouldReceive('get')->andThrow(new RuntimeException('cache down'));
+
+        $this->artisan('vitalwatch:status')
+            ->expectsOutputToContain('composer.lock · 2 packages · last send unknown (cache unavailable)')
+            ->expectsOutputToContain('package-lock.json · 1 package · last send unknown (cache unavailable)')
+            ->assertSuccessful();
+
+        @unlink($npm);
+    });
+
+    test('--deps iki listeyi gönderir, liste başına bir satır', function () {
+        $npm = tempnam(sys_get_temp_dir(), 'vw-npm');
+        writeNpmLock($npm, ['node_modules/zod' => '3.22.2']);
+        app()->instance(Recorder::class, depsRecorder($this->hub, $this->lock, npmLockPath: $npm));
+
+        $this->artisan('vitalwatch:status --deps')
+            ->expectsOutputToContain('Dependency list sent (composer.lock, 2 packages, HTTP 204).')
+            ->expectsOutputToContain('Dependency list sent (package-lock.json, 1 package, HTTP 204).')
+            ->assertSuccessful();
+
+        expect($this->hub->deps)->toHaveCount(2)
+            ->and(array_column(array_column($this->hub->deps, 'dependencies'), 'ecosystem'))->toBe(['Packagist', 'npm']);
+        @unlink($npm);
+    });
+
+    test('--deps: package-lock.json yoksa atlanır, komut başarılı', function () {
+        app()->instance(Recorder::class, depsRecorder($this->hub, $this->lock, npmLockPath: sys_get_temp_dir().'/vw-none-'.uniqid().'/package-lock.json'));
+
+        $this->artisan('vitalwatch:status --deps')
+            ->expectsOutputToContain('Dependency list sent (composer.lock, 2 packages, HTTP 204).')
+            ->expectsOutputToContain('package-lock.json not found — skipped.')
+            ->assertSuccessful();
+    });
+
+    test('--deps: npm gönderimi başarısızsa komut başarısız', function () {
+        $hub = new class extends FakeDepsHub
+        {
+            public function sendDependencies(array $payload): array
+            {
+                $this->deps[] = $payload;
+
+                return $payload['dependencies']['ecosystem'] === 'npm' ? ['sent' => false, 'status' => 500] : ['sent' => true, 'status' => 204];
+            }
+        };
+        $npm = tempnam(sys_get_temp_dir(), 'vw-npm');
+        writeNpmLock($npm, ['node_modules/zod' => '3.22.2']);
+        app()->instance(Recorder::class, depsRecorder($hub, $this->lock, npmLockPath: $npm));
+
+        $this->artisan('vitalwatch:status --deps')
+            ->expectsOutputToContain('Dependency list sent (composer.lock, 2 packages, HTTP 204).')
+            ->expectsOutputToContain('Dependency list NOT SENT (package-lock.json): HTTP 500')
+            ->assertFailed();
+
+        @unlink($npm);
+    });
+
+    test('--deps: hiçbir kilit dosyası yoksa komut başarısız', function () {
+        $none = sys_get_temp_dir().'/vw-none-'.uniqid();
+        app()->instance(Recorder::class, depsRecorder($this->hub, $none.'/composer.lock', npmLockPath: $none.'/package-lock.json'));
+
+        $this->artisan('vitalwatch:status --deps')
+            ->expectsOutputToContain('composer.lock not found — skipped.')
+            ->expectsOutputToContain('Dependency list NOT SENT: no lock file found.')
+            ->assertFailed();
+
+        expect($this->hub->deps)->toBeEmpty();
     });
 
     test('--test bağımlılık listesi göndermez, tek test olayı kalır', function () {

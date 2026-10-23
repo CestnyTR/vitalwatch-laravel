@@ -16,6 +16,39 @@ composer require cestnytr/vitalwatch-laravel
 
 ---
 
+## 0.4.0
+
+### Added
+
+- **npm dependency advisories.** Laravel apps with a Vite/React front-end bundle npm packages into
+  the JavaScript served to visitors; their vulnerabilities were invisible. A second list is now sent
+  from `package-lock.json` to the same `POST /api/i/{key}/deps` endpoint, with the same signature and
+  identity fields and `"ecosystem": "npm"`, `"manifest": "package-lock.json"`. Parsing matches the
+  Node SDK exactly: lockfileVersion 2/3 read the `packages` map (nested `node_modules` copies,
+  aliases under their real name, `dev`/`link`/workspace entries skipped, optional packages kept),
+  lockfileVersion 1 reads the `dependencies` tree (`dev` and `file:` skipped); identical
+  `name@version` entries are deduplicated, different versions of one package are all kept; at most
+  5000 packages, same canonical sha256 hash.
+- Each list is scheduled independently — its own once-a-day / changed-lock-file check and its own
+  one-hour back-off when the hub is unreachable. The `composer.lock` state key is unchanged, so
+  upgrading does not resend that list.
+- If `package-lock.json` is missing (pnpm, Yarn, Bun or no front-end), the npm list is silently
+  skipped.
+- `VITALWATCH_DEPENDENCIES_NPM=false` (config `dependencies_npm`) turns off only the npm list;
+  `VITALWATCH_DEPENDENCIES=false` still turns off both.
+- `vitalwatch:status` shows one `Dependencies` line per lock file, e.g.
+  `composer.lock · 126 packages · last sent 3 h ago` and
+  `package-lock.json · 214 packages · not sent yet` (or `package-lock.json not found`).
+  `--deps` sends both lists and prints one result line per lock file; it fails if a lock file that
+  exists could not be sent, or if neither exists. `--test` still sends no dependency list.
+
+### Changed
+
+- `Recorder::sendDependencies()` and `Recorder::dependencyInfo()` now return one entry per lock
+  file, keyed by file name (`composer.lock`, `package-lock.json`).
+- `vitalwatch:status --deps` result lines name the lock file:
+  `✓ Dependency list sent (composer.lock, 126 packages, HTTP 204).`
+
 ## 0.3.1
 
 ### Fixed

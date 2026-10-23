@@ -61,6 +61,11 @@ class VitalWatchServiceProvider extends ServiceProvider
                 // birlikte okunur ki --deps dışında hiçbir yol göndermesin.
                 'dependencies' => (bool) config('vitalwatch.enabled') && (bool) config('vitalwatch.dependencies', true),
                 'lock_path' => $app->basePath('composer.lock'),
+                // Vite/React paketleri ziyaretçiye giden JavaScript'e gömülüyor;
+                // package-lock.json ikinci liste. Yalnızca npm'i kapatmak için
+                // VITALWATCH_DEPENDENCIES_NPM=false.
+                'npm_lock_path' => $app->basePath('package-lock.json'),
+                'dependencies_npm' => (bool) config('vitalwatch.dependencies_npm', true),
             ],
         ));
     }

@@ -12,7 +12,7 @@ use RuntimeException;
 /**
  * `php artisan vitalwatch:status` — checks the local VitalWatch setup and,
  * with `--test` / `--vitalwatch` / `--deps`, sends a test event, a liveness
- * request or the production dependency list.
+ * request or the production dependency lists.
  *
  * Kurulum teşhisi.
  *
@@ -30,7 +30,7 @@ class StatusCommand extends Command
     protected $signature = 'vitalwatch:status
                             {--test : Send a test event to the hub — shows up as an error in the panel}
                             {--vitalwatch : Send a liveness request only — no error in the panel}
-                            {--deps : Send the production dependency list to the hub now}';
+                            {--deps : Send the production dependency lists (composer.lock, package-lock.json) to the hub now}';
 
     protected $description = 'Check the VitalWatch installation';
 
@@ -63,7 +63,7 @@ class StatusCommand extends Command
         $this->row('Environment', $envName === $envRaw ? $envName : "{$envName} ({$envRaw})");
         $release = Release::detect(base_path(), config('vitalwatch.release'));
         $this->row('Release tag', sprintf('%s (source: %s)', $release['value'] ?? 'not set', $release['source']));
-        $this->row('Dependencies', $this->dependencies());
+        $this->dependencyRows();
         $this->newLine();
 
         $problems = $this->problems($secret);
@@ -184,21 +184,46 @@ class StatusCommand extends Command
         return (bool) config('vitalwatch.enabled') && (bool) config('vitalwatch.dependencies', true);
     }
 
-    /** `composer.lock · 142 packages · last sent 3 h ago` */
-    private function dependencies(): string
+    /**
+     * Kilit dosyası başına bir satır; ikincisi etiketsiz, aynı sütunda:
+     *
+     *   Dependencies       composer.lock · 126 packages · last sent 3 h ago
+     *                      package-lock.json · 214 packages · not sent yet
+     */
+    private function dependencyRows(): void
     {
         if (! $this->dependenciesEnabled()) {
-            return 'disabled';
+            $this->row('Dependencies', 'disabled');
+
+            return;
         }
 
-        $info = app(Recorder::class)->dependencyInfo();
+        $label = 'Dependencies';
+
+        foreach (app(Recorder::class)->dependencyInfo() as $info) {
+            $this->row($label, $this->dependencyLine($info));
+            $label = '';
+        }
+    }
+
+    /**
+     * `composer.lock · 142 packages · last sent 3 h ago`
+     *
+     * @param  array{manifest: string, enabled: bool, packages: ?int, sent_at: ?int, cache: bool}  $info
+     */
+    private function dependencyLine(array $info): string
+    {
+        if (! $info['enabled']) {
+            return $info['manifest'].' · disabled (VITALWATCH_DEPENDENCIES_NPM=false)';
+        }
 
         if ($info['packages'] === null) {
-            return 'composer.lock not found';
+            return $info['manifest'].' not found';
         }
 
         return sprintf(
-            'composer.lock · %d %s · %s',
+            '%s · %d %s · %s',
+            $info['manifest'],
             $info['packages'],
             $info['packages'] === 1 ? 'package' : 'packages',
             match (true) {
@@ -222,8 +247,13 @@ class StatusCommand extends Command
     }
 
     /**
-     * Bağımlılık listesini zamanlamayı beklemeden gönderir. `--test`'ten
-     * ayrı: test tek bir olay olarak kalır, listeyi yalnızca bu seçenek yollar.
+     * Bağımlılık listelerini zamanlamayı beklemeden gönderir; kilit dosyası
+     * başına bir satır. `--test`'ten ayrı: test tek bir olay olarak kalır,
+     * listeleri yalnızca bu seçenek yollar.
+     *
+     * Başarısız sayılır: bulunan ve açık bir listenin gönderimi başarısızsa
+     * ya da hiçbir kilit dosyası bulunamadıysa. package-lock.json'un yokluğu
+     * (pnpm/yarn/bun, saf PHP projesi) tek başına hata değil.
      */
     private function sendDependencies(): bool
     {
@@ -234,25 +264,54 @@ class StatusCommand extends Command
             return false;
         }
 
-        $result = app(Recorder::class)->sendDependencies();
+        $ok = true;
+        $found = false;
 
-        if ($result['sent'] ?? false) {
-            $this->info(sprintf(
-                '  ✓ Dependency list sent (%d packages, HTTP %s).',
-                $result['packages'] ?? 0,
-                $result['status'] ?? '?',
+        foreach (app(Recorder::class)->sendDependencies() as $manifest => $result) {
+            if (! $result['enabled']) {
+                $this->line(sprintf('  - %s skipped: disabled (VITALWATCH_DEPENDENCIES_NPM=false).', $manifest));
+
+                continue;
+            }
+
+            if (! $result['found']) {
+                $this->line(sprintf('  - %s not found — skipped.', $manifest));
+
+                continue;
+            }
+
+            $found = true;
+
+            if ($result['sent'] ?? false) {
+                $this->info(sprintf(
+                    '  ✓ Dependency list sent (%s, %d %s, HTTP %s).',
+                    $manifest,
+                    $result['packages'] ?? 0,
+                    ($result['packages'] ?? 0) === 1 ? 'package' : 'packages',
+                    $result['status'] ?? '?',
+                ));
+
+                continue;
+            }
+
+            $ok = false;
+            $this->error(sprintf(
+                '  ✗ Dependency list NOT SENT (%s): %s',
+                $manifest,
+                $result['error'] ?? 'HTTP '.($result['status'] ?? 'unknown'),
             ));
-
-            return true;
         }
 
-        $this->error(sprintf(
-            '  ✗ Dependency list NOT SENT: %s',
-            $result['error'] ?? 'HTTP '.($result['status'] ?? 'unknown'),
-        ));
-        $this->newLine();
+        if (! $found) {
+            $this->error('  ✗ Dependency list NOT SENT: no lock file found.');
+            $ok = false;
+        }
 
-        return false;
+        if (! $ok) {
+            $this->newLine();
+        }
+
+        return $ok;
     }
 
     private function sendProbe(): bool
