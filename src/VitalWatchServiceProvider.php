@@ -56,6 +56,11 @@ class VitalWatchServiceProvider extends ServiceProvider
                 'slow_query_ms' => config('vitalwatch.slow_query_ms'),
                 'capture_user_id' => config('vitalwatch.capture_user_id'),
                 'ignore' => config('vitalwatch.ignore', []),
+                // Bağımlılık listesi (VITALWATCH_DEPENDENCIES). Kancalar zaten
+                // VITALWATCH_ENABLED=false iken kurulmuyor; yine de iki bayrak
+                // birlikte okunur ki --deps dışında hiçbir yol göndermesin.
+                'dependencies' => (bool) config('vitalwatch.enabled') && (bool) config('vitalwatch.dependencies', true),
+                'lock_path' => $app->basePath('composer.lock'),
             ],
         ));
     }

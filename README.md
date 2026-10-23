@@ -30,6 +30,7 @@ VITALWATCH_URL=https://vitalwatch.example.com
 VITALWATCH_KEY=project-key
 VITALWATCH_SECRET=...
 VITALWATCH_ENV=production
+# VITALWATCH_DEPENDENCIES=false   # optional: stop sending the dependency list (see "Dependency advisories")
 ```
 
 The service provider is loaded automatically through Laravel package discovery; no manual registration
@@ -42,14 +43,15 @@ php artisan vitalwatch:status
 ```
 
 ```text
-  SDK version        0.2.6
-  Latest version     0.2.6
+  SDK version        0.3.0
+  Latest version     0.3.0
   Enabled            yes
   Hub URL            https://hub.example.com
   Project key        my-project
   Secret length      64 characters
   Environment        production
   Release tag        3f2a1b4c5d6e (source: .git)
+  Dependencies       composer.lock · 142 packages · last sent 3 h ago
 
   ✓ Configuration OK.
 
@@ -78,6 +80,7 @@ a hub URL without HTTPS. Also (0.2.3+):
 ```bash
 php artisan vitalwatch:status --test         # sends a test event to the hub — shows up as an error in the panel
 php artisan vitalwatch:status --vitalwatch   # liveness request only — no error in the panel
+php artisan vitalwatch:status --deps         # sends the dependency list now and prints the HTTP status
 ```
 
 `--test` is the right choice when verifying a single installation. Use `--vitalwatch` in an update loop
@@ -188,6 +191,48 @@ Nothing is sent while `VITALWATCH_ENABLED=false` or when the configuration is in
 
 ---
 
+## Dependency advisories
+
+(0.3.0+) The package sends the hub the list of your **production** Composer packages, and the hub
+checks it against the [OSV.dev](https://osv.dev) vulnerability database and alerts you per project.
+
+**What is sent** — only package names and installed versions, from the `packages` section of
+`composer.lock`. `packages-dev`, paths, source URLs, scripts and anything else in the file are never
+read into the request. Branch versions (`dev-main`, `2.x-dev`) are skipped because they have no
+advisories; a leading `v` is stripped (`v7.1.0` → `7.1.0`); at most 5000 packages.
+
+```json
+{
+  "env": "production",
+  "release": "3f2a1b4c5d6e",
+  "php_version": "8.4.1",
+  "sdk_version": "0.3.0",
+  "framework_version": "12.1.0",
+  "dependencies": {
+    "v": 1,
+    "ecosystem": "Packagist",
+    "manifest": "composer.lock",
+    "hash": "<sha256 of the sorted name@version lines>",
+    "packages": [{ "name": "guzzlehttp/guzzle", "version": "7.8.1" }]
+  }
+}
+```
+
+| | |
+|---|---|
+| Endpoint | `POST /api/i/{key}/deps`, signed like events |
+| When | At most once a day per environment, and right after `composer.lock` changes (e.g. a deploy) |
+| Triggered by | The same hooks as the liveness ping — after the response in `terminate()`, after queue jobs and scheduled tasks |
+| Cost per request | One cache read and one `stat` of `composer.lock`; the file is parsed only when it changed or a day has passed |
+| No `composer.lock` | Nothing is sent and nothing is logged |
+| Hub unreachable | Given up silently; retried after an hour at the earliest |
+
+Turn off just this feature with `VITALWATCH_DEPENDENCIES=false`. Nothing is sent while
+`VITALWATCH_ENABLED=false` either. `php artisan vitalwatch:status` shows the state on the
+`Dependencies` line; `--deps` sends the list immediately. `--test` never sends it.
+
+---
+
 ## What it does not collect
 
 These are design constraints and cannot be enabled through configuration:
@@ -229,6 +274,7 @@ In `config/vitalwatch.php`:
 | `ignore` | 6 classes¹ | Exception classes that are not reported (subclasses match too) |
 | `timeout` | 2 | Hub timeout in **seconds**. Values of 100 and above are treated as milliseconds; clamped to 0.1–10 s² |
 | `release` | `VITALWATCH_RELEASE`, otherwise automatic³ | Release tag showing which deploy introduced an error |
+| `dependencies` | `true` (`VITALWATCH_DEPENDENCIES`) | Send the production dependency list for [vulnerability checks](#dependency-advisories) |
 | `env` | `VITALWATCH_ENV`, otherwise `APP_ENV` | `production` · `staging` · `local`. Aliases are mapped: `prod`/`live` → production, `stage`/`stg`/`preprod`/`uat` → staging, `dev`/`development`/`test`/`testing` → local. The hub rejects unrecognized values; the diagnostic command reports an error |
 
 ¹ `AuthenticationException`, `AuthorizationException`, `ValidationException`,

@@ -74,6 +74,21 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Dependency advisories
+    |--------------------------------------------------------------------------
+    |
+    | Sends the names and installed versions of your production packages
+    | (the `packages` section of composer.lock, not `packages-dev`) so the hub
+    | can check them against known vulnerabilities. Sent after the response,
+    | at most once a day and whenever composer.lock changes. Nothing else is
+    | sent. Set to false to turn off just this feature.
+    |
+    */
+
+    'dependencies' => (bool) env('VITALWATCH_DEPENDENCIES', true),
+
+    /*
+    |--------------------------------------------------------------------------
     | Ignored exception classes
     |--------------------------------------------------------------------------
     |

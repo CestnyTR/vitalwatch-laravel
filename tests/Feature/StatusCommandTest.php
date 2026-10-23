@@ -1,7 +1,9 @@
 <?php
 
 use CestnyTR\VitalWatch\Recorder;
+use CestnyTR\VitalWatch\Support\Dependencies;
 use CestnyTR\VitalWatch\Transport\HubClient;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * Teşhis komutunun tek işi var: yerelde yanlış olanı görünür kılmak.
@@ -185,4 +187,82 @@ test('takma ad ortam kabul edilir ve karşılığıyla gösterilir', function ()
     $this->artisan('vitalwatch:status')
         ->expectsOutputToContain('production (prod)')
         ->assertSuccessful();
+});
+
+/*
+| Bağımlılık listesi satırı ve --deps. Yardımcılar (FakeDepsHub, writeLock,
+| depsRecorder) tests/Pest.php'de.
+*/
+describe('bağımlılık listesi', function () {
+    beforeEach(function () {
+        Cache::flush();
+        Dependencies::forget();
+        $this->lock = tempnam(sys_get_temp_dir(), 'vw-lock');
+        writeLock($this->lock, [
+            ['name' => 'laravel/framework', 'version' => 'v12.1.0'],
+            ['name' => 'guzzlehttp/guzzle', 'version' => '7.8.1'],
+        ]);
+        $this->hub = new FakeDepsHub;
+        app()->instance(Recorder::class, depsRecorder($this->hub, $this->lock));
+    });
+
+    afterEach(fn () => @unlink($this->lock));
+
+    test('henüz gönderilmediyse paket sayısı ve not sent yet yazılır', function () {
+        $this->artisan('vitalwatch:status')
+            ->expectsOutputToContain('Dependencies       composer.lock · 2 packages · not sent yet')
+            ->assertSuccessful();
+    });
+
+    test('son gönderim zamanı yazılır', function () {
+        app(Recorder::class)->dependenciesIfDue();
+        $this->travel(3)->hours();
+
+        $this->artisan('vitalwatch:status')
+            ->expectsOutputToContain('composer.lock · 2 packages · last sent 3 h ago')
+            ->assertSuccessful();
+    });
+
+    test('composer.lock yoksa söylenir', function () {
+        app()->instance(Recorder::class, depsRecorder($this->hub, sys_get_temp_dir().'/vw-none-'.uniqid().'/composer.lock'));
+
+        $this->artisan('vitalwatch:status')
+            ->expectsOutputToContain('Dependencies       composer.lock not found')
+            ->assertSuccessful();
+    });
+
+    test('kapalıysa disabled yazılır ve --deps göndermez', function () {
+        config(['vitalwatch.dependencies' => false]);
+
+        $this->artisan('vitalwatch:status --deps')
+            ->expectsOutputToContain('Dependencies       disabled')
+            ->expectsOutputToContain('Dependency list NOT SENT: disabled')
+            ->assertFailed();
+
+        expect($this->hub->deps)->toBeEmpty();
+    });
+
+    test('--deps listeyi hemen gönderir ve HTTP durumunu yazar', function () {
+        $this->artisan('vitalwatch:status --deps')
+            ->expectsOutputToContain('Dependency list sent (2 packages, HTTP 204).')
+            ->assertSuccessful();
+
+        expect($this->hub->deps)->toHaveCount(1)
+            ->and($this->hub->events)->toBeEmpty();
+    });
+
+    test('--deps başarısızsa komut başarısız döner', function () {
+        $this->hub->up = false;
+
+        $this->artisan('vitalwatch:status --deps')
+            ->expectsOutputToContain('Dependency list NOT SENT: Could not resolve host')
+            ->assertFailed();
+    });
+
+    test('--test bağımlılık listesi göndermez, tek test olayı kalır', function () {
+        $this->artisan('vitalwatch:status --test')->assertSuccessful();
+
+        expect($this->hub->deps)->toBeEmpty()
+            ->and($this->hub->events)->toHaveCount(1);
+    });
 });

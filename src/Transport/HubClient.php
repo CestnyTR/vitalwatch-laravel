@@ -24,6 +24,9 @@ class HubClient
      */
     public const MAX_BODY_BYTES = 8192;
 
+    /** Bağımlılık listesi ucunun gövde sınırı (512 KB); aşan liste hiç gönderilmez. */
+    public const MAX_DEPS_BODY_BYTES = 524288;
+
     /** Zaman aşımı, milisaniye. */
     private readonly int $timeoutMs;
 
@@ -99,55 +102,124 @@ class HubClient
                 return ['sent' => false, 'error' => 'body-too-large'];
             }
 
-            $timestamp = (string) time();
+            return $this->post('server', $body);
+        } catch (Throwable $e) {
+            return ['sent' => false, 'error' => $e->getMessage()];
+        }
+    }
 
-            // Zaman damgası imzaya dahildir; olmasaydı saldırgan damgayı
-            // değiştirip eski bir gövdeyi yeniden oynatabilirdi.
-            $signature = hash_hmac('sha256', $timestamp.'.'.$body, $this->secret);
+    /**
+     * Sends the production dependency list to `/api/i/{key}/deps`.
+     * Signed exactly like events; never throws.
+     *
+     * Olaylardan ayrı uç ve ayrı sınır: 5000 paketlik liste 8 KB'a sığmaz.
+     * Kırpılacak alan yok — liste ya bütün gider ya hiç gitmez (yarım liste
+     * hub'da "paket kaldırıldı" diye okunurdu).
+     *
+     * @param  array<string, mixed>  $payload
+     * @return array{sent: bool, status?: int, error?: string}
+     */
+    public function sendDependencies(array $payload): array
+    {
+        if (! $this->configured()) {
+            return ['sent' => false, 'error' => 'missing-config'];
+        }
 
-            $ch = curl_init(rtrim($this->url, '/').'/api/i/'.$this->key.'/server');
+        try {
+            $body = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
 
-            curl_setopt_array($ch, [
-                CURLOPT_POST => true,
-                CURLOPT_POSTFIELDS => $body,
-                CURLOPT_RETURNTRANSFER => true,
-                // _MS: saniye tam sayı; 0.5 sn sıfıra, yani sınırsıza dönerdi.
-                CURLOPT_CONNECTTIMEOUT_MS => $this->timeoutMs,
-                CURLOPT_TIMEOUT_MS => $this->timeoutMs,
-                // Saniye altı zaman aşımında eşzamanlı çözücü SIGALRM
-                // kullanıyor; çok iş parçacıklı sunucuda (FrankenPHP) güvensiz,
-                // bazı derlemelerde DNS anında zaman aşımına düşüyor.
-                CURLOPT_NOSIGNAL => true,
-                // Yönlendirme takip edilmez: imzalı gövdeyi bilinmeyen bir
-                // adrese göndermek istemeyiz.
-                CURLOPT_FOLLOWLOCATION => false,
-                CURLOPT_HTTPHEADER => [
-                    'Content-Type: application/json',
-                    'X-VitalWatch-Signature: sha256='.$signature,
-                    'X-VitalWatch-Timestamp: '.$timestamp,
-                ],
-            ]);
-
-            $result = curl_exec($ch);
-            $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            $error = curl_error($ch);
-            curl_close($ch);
-
-            if ($result === false || $error !== '') {
-                return ['sent' => false, 'error' => $error !== '' ? $error : 'curl-failed'];
+            if ($body === false || strlen($body) > self::MAX_DEPS_BODY_BYTES) {
+                return ['sent' => false, 'error' => 'body-too-large'];
             }
 
-            /*
-            | Hub başarıda da geçersiz istekte de 204 döner (saldırgana geri
-            | bildirim verilmez). Yani 204 "kabul edildi" demek DEĞİL, yalnızca
-            | "istek ulaştı" demek. Teşhis komutu bunu açıkça yazıyor.
-            */
-            return ['sent' => $status > 0 && $status < 400, 'status' => $status];
+            return $this->post('deps', $body);
+        } catch (Throwable $e) {
+            return ['sent' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * Signature headers for a body — the one signing code path for every endpoint.
+     *
+     * @return list<string>
+     */
+    public function headers(string $body, ?string $timestamp = null): array
+    {
+        $timestamp ??= (string) time();
+
+        // Zaman damgası imzaya dahildir; olmasaydı saldırgan damgayı
+        // değiştirip eski bir gövdeyi yeniden oynatabilirdi.
+        $signature = hash_hmac('sha256', $timestamp.'.'.$body, (string) $this->secret);
+
+        return [
+            'Content-Type: application/json',
+            'X-VitalWatch-Signature: sha256='.$signature,
+            'X-VitalWatch-Timestamp: '.$timestamp,
+        ];
+    }
+
+    /**
+     * İmzalı POST — `server` ve `deps` uçları bu tek yoldan geçer.
+     *
+     * @return array{sent: bool, status?: int, error?: string}
+     */
+    private function post(string $endpoint, string $body): array
+    {
+        try {
+            return $this->transmit(
+                rtrim((string) $this->url, '/').'/api/i/'.$this->key.'/'.$endpoint,
+                $this->headers($body),
+                $body,
+            );
         } catch (Throwable $e) {
             // Sessizce vazgeç. İzleme paketinin izlediği uygulamayı bozması,
             // çözdüğü sorundan büyük bir sorundur.
             return ['sent' => false, 'error' => $e->getMessage()];
         }
+    }
+
+    /**
+     * Ağ katmanı. Testler bunu ezip imzalı isteği ağa çıkmadan yakalar.
+     *
+     * @param  list<string>  $headers
+     * @return array{sent: bool, status?: int, error?: string}
+     */
+    protected function transmit(string $url, array $headers, string $body): array
+    {
+        $ch = curl_init($url);
+
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => $body,
+            CURLOPT_RETURNTRANSFER => true,
+            // _MS: saniye tam sayı; 0.5 sn sıfıra, yani sınırsıza dönerdi.
+            CURLOPT_CONNECTTIMEOUT_MS => $this->timeoutMs,
+            CURLOPT_TIMEOUT_MS => $this->timeoutMs,
+            // Saniye altı zaman aşımında eşzamanlı çözücü SIGALRM
+            // kullanıyor; çok iş parçacıklı sunucuda (FrankenPHP) güvensiz,
+            // bazı derlemelerde DNS anında zaman aşımına düşüyor.
+            CURLOPT_NOSIGNAL => true,
+            // Yönlendirme takip edilmez: imzalı gövdeyi bilinmeyen bir
+            // adrese göndermek istemeyiz.
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_HTTPHEADER => $headers,
+        ]);
+
+        $result = curl_exec($ch);
+        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
+        curl_close($ch);
+
+        if ($result === false || $error !== '') {
+            return ['sent' => false, 'error' => $error !== '' ? $error : 'curl-failed'];
+        }
+
+        /*
+        | Hub başarıda da geçersiz istekte de 204 döner (saldırgana geri
+        | bildirim verilmez). Yani 204 "kabul edildi" demek DEĞİL, yalnızca
+        | "istek ulaştı" demek. Teşhis komutu bunu açıkça yazıyor.
+        */
+        return ['sent' => $status > 0 && $status < 400, 'status' => $status];
     }
 
     /**

@@ -11,7 +11,8 @@ use RuntimeException;
 
 /**
  * `php artisan vitalwatch:status` — checks the local VitalWatch setup and,
- * with `--test` / `--vitalwatch`, sends a test event or a liveness request.
+ * with `--test` / `--vitalwatch` / `--deps`, sends a test event, a liveness
+ * request or the production dependency list.
  *
  * Kurulum teşhisi.
  *
@@ -28,7 +29,8 @@ class StatusCommand extends Command
 {
     protected $signature = 'vitalwatch:status
                             {--test : Send a test event to the hub — shows up as an error in the panel}
-                            {--vitalwatch : Send a liveness request only — no error in the panel}';
+                            {--vitalwatch : Send a liveness request only — no error in the panel}
+                            {--deps : Send the production dependency list to the hub now}';
 
     protected $description = 'Check the VitalWatch installation';
 
@@ -61,6 +63,7 @@ class StatusCommand extends Command
         $this->row('Environment', $envName === $envRaw ? $envName : "{$envName} ({$envRaw})");
         $release = Release::detect(base_path(), config('vitalwatch.release'));
         $this->row('Release tag', sprintf('%s (source: %s)', $release['value'] ?? 'not set', $release['source']));
+        $this->row('Dependencies', $this->dependencies());
         $this->newLine();
 
         $problems = $this->problems($secret);
@@ -82,6 +85,10 @@ class StatusCommand extends Command
         }
 
         if ($this->option('vitalwatch') && ! $this->sendHeartbeat()) {
+            return self::FAILURE;
+        }
+
+        if ($this->option('deps') && ! $this->sendDependencies()) {
             return self::FAILURE;
         }
 
@@ -164,6 +171,79 @@ class StatusCommand extends Command
 
         $this->error(sprintf(
             '  ✗ Liveness request NOT SENT: %s',
+            $result['error'] ?? 'HTTP '.($result['status'] ?? 'unknown'),
+        ));
+        $this->newLine();
+
+        return false;
+    }
+
+    /** Güncel yapılandırma okunur: iki bayraktan biri kapalıysa özellik kapalı. */
+    private function dependenciesEnabled(): bool
+    {
+        return (bool) config('vitalwatch.enabled') && (bool) config('vitalwatch.dependencies', true);
+    }
+
+    /** `composer.lock · 142 packages · last sent 3 h ago` */
+    private function dependencies(): string
+    {
+        if (! $this->dependenciesEnabled()) {
+            return 'disabled';
+        }
+
+        $info = app(Recorder::class)->dependencyInfo();
+
+        if ($info['packages'] === null) {
+            return 'composer.lock not found';
+        }
+
+        return sprintf(
+            'composer.lock · %d %s · %s',
+            $info['packages'],
+            $info['packages'] === 1 ? 'package' : 'packages',
+            $info['sent_at'] === null ? 'not sent yet' : 'last sent '.self::ago(now()->getTimestamp() - $info['sent_at']),
+        );
+    }
+
+    private static function ago(int $seconds): string
+    {
+        $seconds = max(0, $seconds);
+
+        return match (true) {
+            $seconds < 60 => 'just now',
+            $seconds < 3600 => intdiv($seconds, 60).' min ago',
+            $seconds < 86400 => intdiv($seconds, 3600).' h ago',
+            default => intdiv($seconds, 86400).' d ago',
+        };
+    }
+
+    /**
+     * Bağımlılık listesini zamanlamayı beklemeden gönderir. `--test`'ten
+     * ayrı: test tek bir olay olarak kalır, listeyi yalnızca bu seçenek yollar.
+     */
+    private function sendDependencies(): bool
+    {
+        if (! $this->dependenciesEnabled()) {
+            $this->error('  ✗ Dependency list NOT SENT: disabled (VITALWATCH_DEPENDENCIES=false).');
+            $this->newLine();
+
+            return false;
+        }
+
+        $result = app(Recorder::class)->sendDependencies();
+
+        if ($result['sent'] ?? false) {
+            $this->info(sprintf(
+                '  ✓ Dependency list sent (%d packages, HTTP %s).',
+                $result['packages'] ?? 0,
+                $result['status'] ?? '?',
+            ));
+
+            return true;
+        }
+
+        $this->error(sprintf(
+            '  ✗ Dependency list NOT SENT: %s',
             $result['error'] ?? 'HTTP '.($result['status'] ?? 'unknown'),
         ));
         $this->newLine();

@@ -2,6 +2,7 @@
 
 namespace CestnyTR\VitalWatch;
 
+use CestnyTR\VitalWatch\Support\Dependencies;
 use CestnyTR\VitalWatch\Support\Scrubber;
 use CestnyTR\VitalWatch\Transport\HubClient;
 use Composer\InstalledVersions;
@@ -508,11 +509,189 @@ class Recorder
 
         // add(): yalnızca anahtar yoksa yazar ve true döner — yarış koşulunda
         // iki eşzamanlı istek iki canlılık isteği göndermesin.
-        if (! Cache::add($key, true, now()->addHours(self::HEARTBEAT_HOURS))) {
-            return;
+        if (Cache::add($key, true, now()->addHours(self::HEARTBEAT_HOURS))) {
+            $this->heartbeat();
         }
 
-        $this->heartbeat();
+        /*
+        | Bağımlılık listesi aynı tetikleyiciye bağlı: terminate (yanıt
+        | gittikten sonra), kuyruk ve zamanlayıcı. Laravel'de uzun yaşayan
+        | bir süreç yok; canlılık için seçilen yol burada da doğru yol.
+        */
+        try {
+            $this->dependenciesIfDue();
+        } catch (Throwable) {
+            // Sessiz.
+        }
+    }
+
+    /**
+     * Sends the production dependency list if it is due: never sent, changed
+     * (e.g. after a deploy) or last sent 24 hours ago. Called after the
+     * response, from the same hooks as the liveness ping.
+     *
+     * Bağımlılık listesi, süresi geldiyse.
+     *
+     * Olağan istekte maliyet: bir önbellek okuması ve bir `stat`. Dosya
+     * yalnızca parmak izi (mtime + boyut) değiştiyse ya da 24 saat dolduysa
+     * ayrıştırılır.
+     */
+    public function dependenciesIfDue(): void
+    {
+        try {
+            if (! ($this->config['dependencies'] ?? false)) {
+                return;
+            }
+
+            $path = $this->config['lock_path'] ?? null;
+            $fingerprint = is_string($path) ? Dependencies::fingerprint($path) : null;
+
+            // composer.lock yok ya da okunamıyor: hiçbir şey yapılmaz, log da yok.
+            if ($fingerprint === null) {
+                return;
+            }
+
+            $now = now()->getTimestamp();
+            $key = $this->dependencyKey();
+            $state = Cache::get($key);
+            $state = is_array($state) ? $state : null;
+
+            // Hızlı yol: dosya aynı ve süre dolmamış — ayrıştırma yok.
+            if ($state !== null
+                && ($state['fingerprint'] ?? null) === $fingerprint
+                && $now - (int) ($state['sent_at'] ?? 0) < Dependencies::INTERVAL_SECONDS) {
+                return;
+            }
+
+            $list = Dependencies::load($path);
+
+            if ($list === null) {
+                return;
+            }
+
+            if (! Dependencies::due($state, $list['hash'], $now)) {
+                // Dosyaya dokunulmuş ama liste aynı: parmak izi tazelenir,
+                // sonraki isteklerde yeniden ayrıştırılmaz.
+                Cache::put($key, [...$state, 'fingerprint' => $fingerprint], now()->addDays(self::DEPENDENCY_STATE_DAYS));
+
+                return;
+            }
+
+            /*
+            | Deploy sonrası eşzamanlı istekler aynı listeyi birden çok kez
+            | göndermesin. Kilit gönderim başarılıysa kaldırılır; hub
+            | erişilemiyorsa bir saat durur — her istekte zaman aşımı
+            | beklenmez (garanti 4).
+            */
+            if (! Cache::add($key.':lock', true, now()->addHour())) {
+                return;
+            }
+
+            $result = $this->postDependencies($list, $fingerprint);
+
+            if ($result['sent'] ?? false) {
+                Cache::forget($key.':lock');
+            }
+        } catch (Throwable) {
+            // Kendi hatasını raporlamaz.
+        }
+    }
+
+    /**
+     * Sends the dependency list now, regardless of the schedule (`vitalwatch:status --deps`).
+     *
+     * @return array{sent: bool, status?: int, error?: string, packages?: int}
+     */
+    public function sendDependencies(): array
+    {
+        try {
+            $path = $this->config['lock_path'] ?? null;
+            $list = is_string($path) ? Dependencies::load($path) : null;
+
+            if ($list === null) {
+                return ['sent' => false, 'error' => 'composer.lock not found'];
+            }
+
+            $result = $this->postDependencies($list, (string) Dependencies::fingerprint($path));
+
+            return [...$result, 'packages' => count($list['packages'])];
+        } catch (Throwable $e) {
+            return ['sent' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * What `vitalwatch:status` shows: package count (null when composer.lock
+     * is missing) and the time of the last successful send.
+     *
+     * @return array{packages: ?int, sent_at: ?int}
+     */
+    public function dependencyInfo(): array
+    {
+        try {
+            $path = $this->config['lock_path'] ?? null;
+            $list = is_string($path) ? Dependencies::load($path) : null;
+            $state = Cache::get($this->dependencyKey());
+
+            return [
+                'packages' => $list !== null ? count($list['packages']) : null,
+                'sent_at' => is_array($state) && isset($state['sent_at']) ? (int) $state['sent_at'] : null,
+            ];
+        } catch (Throwable) {
+            return ['packages' => null, 'sent_at' => null];
+        }
+    }
+
+    /** Durum kaydının ömrü; 24 saatlik yeniden gönderimden uzun olmalı. */
+    private const DEPENDENCY_STATE_DAYS = 30;
+
+    /**
+     * @param  array{packages: list<array{name: string, version: string}>, hash: string}  $list
+     * @return array{sent: bool, status?: int, error?: string}
+     */
+    private function postDependencies(array $list, string $fingerprint): array
+    {
+        $result = $this->client->sendDependencies([
+            ...array_filter($this->identity(), fn ($v) => $v !== null),
+            'dependencies' => Dependencies::payload($list),
+        ]);
+
+        if ($result['sent'] ?? false) {
+            Cache::put($this->dependencyKey(), [
+                'hash' => $list['hash'],
+                'sent_at' => now()->getTimestamp(),
+                'fingerprint' => $fingerprint,
+            ], now()->addDays(self::DEPENDENCY_STATE_DAYS));
+        }
+
+        return $result;
+    }
+
+    /** Proje ve ortam bazlı: aynı önbelleği paylaşan kurulumlar birbirini bastırmaz. */
+    private function dependencyKey(): string
+    {
+        return 'vitalwatch:deps:'.($this->config['key'] ?? 'unknown').':'.($this->config['env'] ?? 'unknown');
+    }
+
+    /**
+     * Her istekte giden kimlik alanları — olaylar ve bağımlılık listesi aynı.
+     *
+     * @return array<string, mixed>
+     */
+    private function identity(): array
+    {
+        return [
+            'env' => $this->config['env'] ?? null,
+            'release' => $this->config['release'] ?? null,
+            'php_version' => PHP_VERSION,
+            /*
+            | Hangi projenin eski SDK sürümünde kaldığı, ancak olayla
+            | birlikte gelirse görülebiliyor. Onlarca kurulumda tek tek
+            | sunucuya girmeden bilmenin başka yolu yok.
+            */
+            'sdk_version' => self::version(),
+            'framework_version' => app()->version(),
+        ];
     }
 
     /**
@@ -526,21 +705,12 @@ class Recorder
         try {
             $payload = array_filter([
                 ...$event,
-                'env' => $this->config['env'],
-                'release' => $this->config['release'],
+                ...$this->identity(),
                 'query_count' => $this->queryCount,
                 'slowest_query_ms' => $event['slowest_query_ms']
                     ?? ($this->slowestQueryMs !== null ? (int) round($this->slowestQueryMs) : null),
                 'slowest_query_sql' => $event['slowest_query_sql']
                     ?? Scrubber::sql($this->slowestQuerySql),
-                'php_version' => PHP_VERSION,
-                /*
-                | Hangi projenin eski SDK sürümünde kaldığı, ancak olayla
-                | birlikte gelirse görülebiliyor. Onlarca kurulumda tek tek
-                | sunucuya girmeden bilmenin başka yolu yok.
-                */
-                'sdk_version' => self::version(),
-                'framework_version' => app()->version(),
                 'user_id' => $this->userId(),
             ], fn ($v) => $v !== null);
 

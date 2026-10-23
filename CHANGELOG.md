@@ -16,6 +16,32 @@ composer require cestnytr/vitalwatch-laravel
 
 ---
 
+## 0.3.0
+
+### Added
+
+- **Dependency advisories.** The production dependency list is sent to the hub, which checks it
+  against OSV.dev and alerts per project. Only names and installed versions of the `packages`
+  section of `composer.lock` are sent (`packages-dev` never); a leading `v` is stripped, branch
+  versions (`dev-main`, `2.x-dev`) are skipped, at most 5000 packages, sorted by name with a
+  sha256 hash of the canonical `name@version` lines. New endpoint `POST /api/i/{key}/deps`, signed
+  like events (body up to 512 KB).
+- Sent at most once a day per environment and whenever `composer.lock` changes, from the same
+  after-response hooks as the liveness ping (`terminate()`, queue, scheduler) — never during a
+  request. Per request it costs one cache read and one `stat`; the file is parsed only when it
+  changed. If `composer.lock` is missing, nothing happens.
+- `VITALWATCH_DEPENDENCIES=false` (config `dependencies`) turns off just this feature.
+- `vitalwatch:status` shows a `Dependencies` line (`composer.lock · 142 packages · last sent 3 h ago`,
+  `not sent yet`, `composer.lock not found` or `disabled`). New `--deps` option sends the list
+  immediately and prints the HTTP status. `--test` still sends a single test event only.
+
+### Hub compatibility
+
+- A hub without the `/deps` endpoint answers with an error status; the package then retries at
+  most once an hour and nothing else changes.
+
+---
+
 ## 0.2.6
 
 ### Changed
