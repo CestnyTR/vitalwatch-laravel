@@ -19,7 +19,7 @@ jobs:
   check:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Sürüm biçimi, CHANGELOG bölümü ve etiketin yokluğu
@@ -45,7 +45,7 @@ jobs:
       # ruleset'i `v*` etiketlerini herkese kapatıyor ve istisna yalnızca deploy
       # key. Böylece elle atılan (testten geçmemiş) bir etiket Packagist'e
       # hiç ulaşamaz.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
       # Etiket test edilen commit'e atılır: çalıştırma sırasında main ilerlemiş
